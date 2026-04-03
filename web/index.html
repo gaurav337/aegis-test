@@ -4,71 +4,115 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aegis-X | Deepfake Forensics</title>
-    <!-- Modern Typeface -->
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="background-globes">
-        <div class="globe globe-1"></div>
-        <div class="globe globe-2"></div>
+    <!-- Subtle animated grain overlay for tactile feel -->
+    <div class="texture-overlay"></div>
+    
+    <!-- Soft ambient gradient orbs -->
+    <div class="ambient-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
     </div>
 
     <div class="container">
         <header>
             <div class="logo">
-                <span class="icon">🛡️</span>
+                <span class="logo-icon">🛡️</span>
                 <h1>Aegis-X</h1>
             </div>
-            <p>Advanced Deepfake Forensics & Detection Pipeline</p>
+            <p class="tagline">Advanced Deepfake Forensics & Detection Pipeline</p>
+            <div class="header-decoration"></div>
         </header>
 
         <main>
+            <!-- Upload Zone -->
             <div class="upload-section" id="upload-zone">
                 <div class="upload-content">
-                    <div class="upload-icon">📁</div>
+                    <div class="upload-icon-wrapper">
+                        <span class="upload-icon">📁</span>
+                        <span class="upload-glow"></span>
+                    </div>
                     <h3>Drag & Drop media here</h3>
-                    <p>or click to browse native image or video</p>
+                    <p>or <button type="button" class="browse-link">click to browse</button> native image or video</p>
                     <input type="file" id="file-input" accept="image/jpeg, image/png, image/webp, video/mp4, video/webm, video/quicktime" hidden>
                 </div>
+                
                 <div class="preview-container" id="preview-container" style="display: none;">
-                    <img id="image-preview" src="" alt="Preview">
-                    <video id="video-preview" src="" controls style="display: none;"></video>
-                    <button class="btn analyze-btn" id="analyze-btn">Analyze Media</button>
-                    <button class="btn remove-btn" id="remove-btn" style="background: transparent; box-shadow: none; border: 1px solid var(--text-secondary); margin-top: 10px;">Remove Media</button>
+                    <div class="preview-frame">
+                        <img id="image-preview" src="" alt="Preview">
+                        <video id="video-preview" src="" controls style="display: none;"></video>
+                        <div class="preview-badge">Ready for Analysis</div>
+                    </div>
+                    <div class="action-buttons">
+                        <button class="btn btn-primary analyze-btn" id="analyze-btn">Analyze Media</button>
+                        <button class="btn btn-ghost remove-btn" id="remove-btn">Remove Media</button>
+                    </div>
                 </div>
             </div>
 
+            <!-- Loader Section -->
             <div class="loader-section hidden" id="loader">
-                <div class="spinner"></div>
-                <p>Running Forensic Pipeline...</p>
-                <div class="progress-steps" id="progress-steps">
-                    <span class="step active">Preprocessing Face</span>
-                    <span class="step">Extracting Features</span>
-                    <span class="step">Computing Confidence</span>
+                <div class="loader-content">
+                    <div class="spinner-wrapper">
+                        <div class="spinner"></div>
+                        <div class="spinner-ring"></div>
+                    </div>
+                    <p class="loader-text">Running Forensic Pipeline...</p>
+                    <div class="progress-steps" id="progress-steps">
+                        <span class="step active" data-step="1">
+                            <span class="step-dot"></span>
+                            <span class="step-label">Preprocessing Face</span>
+                        </span>
+                        <span class="step" data-step="2">
+                            <span class="step-dot"></span>
+                            <span class="step-label">Extracting Features</span>
+                        </span>
+                        <span class="step" data-step="3">
+                            <span class="step-dot"></span>
+                            <span class="step-label">Computing Confidence</span>
+                        </span>
+                    </div>
                 </div>
             </div>
 
+            <!-- Results Section -->
             <div class="results-section hidden" id="results-zone">
                 <div class="verdict-banner" id="final-verdict-banner">
+                    <div class="verdict-icon" id="verdict-icon">⚙️</div>
                     <h2 id="final-verdict">Loading...</h2>
-                    <p>Authenticity Score: <span class="score-pill" id="final-score">--</span></p>
-                    <p style="margin-top: 5px; font-size: 0.9rem; color: var(--text-secondary)">Faces Detected: <span id="faces-detected"></span></p>
+                    <div class="score-container">
+                        <span class="score-label">Authenticity Score</span>
+                        <span class="score-pill" id="final-score">--</span>
+                    </div>
+                    <p class="faces-count">Faces Detected: <span id="faces-detected">0</span></p>
                 </div>
 
-                <div class="explanation-box" id="explanation-box" style="margin-bottom: 30px; padding: 20px; border-radius: 12px; background: linear-gradient(145deg, rgba(20,25,35,0.6), rgba(15,20,25,0.8)); border-left: 4px solid var(--primary-color); display: none; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
-                    <h3 style="margin-bottom: 12px; font-size: 1.2rem; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
-                        <span style="font-size: 1.4rem;">🤖</span> Agent Synthesis
-                    </h3>
-                    <p id="explanation-text" style="color: #cbd5e1; white-space: pre-wrap; line-height: 1.6; font-size: 1.05rem; font-weight: 300; letter-spacing: 0.3px;"></p>
+                <!-- AI Explanation Box -->
+                <div class="explanation-box" id="explanation-box">
+                    <div class="explanation-header">
+                        <span class="agent-icon">🤖</span>
+                        <h3>Agent Synthesis</h3>
+                    </div>
+                    <p id="explanation-text"></p>
+                    <div class="explanation-decoration"></div>
                 </div>
 
+                <!-- Tool Results Grid -->
                 <div class="tools-grid" id="tools-grid">
-                    <!-- Tool result cards injected via script.js -->
+                    <!-- Tool cards injected via script.js -->
                 </div>
-                <button class="btn restart-btn" id="restart-btn">Analyze Another Media</button>
+                
+                <button class="btn btn-secondary restart-btn" id="restart-btn">Analyze Another Media</button>
             </div>
         </main>
+
+        <footer class="footer">
+            <p>© 2026 Aegis-X Forensics · Built with precision</p>
+        </footer>
     </div>
 
     <script src="script.js"></script>

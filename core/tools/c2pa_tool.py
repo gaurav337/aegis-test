@@ -86,15 +86,37 @@ class C2PATool(BaseForensicTool):
                         return self._no_c2pa_result(start_time)
                     raise read_err
             
-            # --- Extract Signer ---
+            # --- Extract Signer and AI Claims ---
             signer = None
             timestamp = None
+            is_ai_generated = False
             
             if c2pa_dict and "active_manifest" in c2pa_dict:
                 manifest_claim = c2pa_dict.get("manifests", {}).get(c2pa_dict["active_manifest"], {})
                 sig_info = manifest_claim.get("signature_info", {})
                 signer = sig_info.get("issuer")
                 timestamp = sig_info.get("time")
+                
+                # Check assertions for AI generation
+                assertions = manifest_claim.get("assertions", [])
+                ai_keywords = ["gemini", "midjourney", "dall-e", "stable diffusion", "openai", "firefly", "ai", "generated"]
+                
+                for assertion in assertions:
+                    label = assertion.get("label", "")
+                    data = assertion.get("data", {})
+                    
+                    if label == "c2pa.actions":
+                        actions = data.get("actions", [])
+                        for action in actions:
+                            action_type = action.get("action", "").lower()
+                            software_agent = action.get("softwareAgent", "").lower()
+                            
+                            if ("generator" in action_type) or ("generated" in action_type) or (("c2pa.created" in action_type) and any(kw in software_agent for kw in ai_keywords)):
+                                is_ai_generated = True
+                                
+                            for kw in ai_keywords:
+                                if kw in software_agent or kw in action_type:
+                                    is_ai_generated = True
             
             # --- Verification Logic ---
             has_valid_sig = signer is not None
@@ -102,6 +124,7 @@ class C2PATool(BaseForensicTool):
             # ✅ FIX: Trim details to Spec Contract + Short-Circuit Flag
             details = {
                 "c2pa_verified": has_valid_sig,  # ← Agent reads this for short-circuit
+                "is_ai_generated": is_ai_generated,
                 "signer": signer or "Unknown",
                 "timestamp": timestamp or "Unknown"
             }

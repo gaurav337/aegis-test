@@ -83,11 +83,9 @@ class OllamaClient:
         self.max_tokens = int(getattr(config, 'llm_max_tokens', 1024))
         self.context_window = int(getattr(config, 'llm_context_window', 4096))
         
-        # C1 FIX: Omit keep_alive (Ollama default 5min)
-        # 0 causes 4× performance regression on batch scans
-        # -1 keeps forever (VRAM exhaustion)
-        # None = omit = Ollama default (5min) — CORRECT FOR BATCH
-        self.keep_alive: Optional[int] = None
+        # C1 FIX: Use keep_alive=0 for low VRAM systems like 4GB
+        # This prevents Ollama from hoarding VRAM after LLM generations
+        self.keep_alive: Optional[int] = 0
         
         # Concurrent execution semaphore (prevents VRAM thrashing with keep_alive: 0)
         # Even with default keep_alive, limit concurrent generations for 4GB VRAM

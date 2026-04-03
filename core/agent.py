@@ -139,16 +139,25 @@ class ForensicAgent:
             })
             
             if tool_name == "check_c2pa" and result.success and result.details.get("c2pa_verified", False):
-                yield AgentEvent("EARLY_STOP", data={"reason": "C2PA_VERIFIED"})
-                # MUST yield verdict BEFORE return — generator return value is discarded by for loops
-                yield AgentEvent("verdict", data={
-                    "verdict": "REAL",
-                    "score": 1.0,
-                    "explanation": "Cryptographically signed via C2PA Content Credentials (signed by: {}).".format(
-                        result.details.get("signer", "Unknown")
-                    ),
-                    "degraded": False
-                })
+                is_ai = result.details.get("is_ai_generated", False)
+                signer = result.details.get("signer", "Unknown")
+                
+                if is_ai:
+                    yield AgentEvent("EARLY_STOP", data={"reason": "C2PA_AI_GENERATED", "confidence": 1.0})
+                    yield AgentEvent("verdict", data={
+                        "verdict": "FAKE",
+                        "score": 1.0,
+                        "explanation": f"C2PA Content Credentials detected. The cryptographically signed provenance data explicitly states this media was AI-generated (signed by: {signer}).",
+                        "degraded": False
+                    })
+                else:
+                    yield AgentEvent("EARLY_STOP", data={"reason": "C2PA_REAL_IMAGE", "confidence": 1.0})
+                    yield AgentEvent("verdict", data={
+                        "verdict": "REAL",
+                        "score": 1.0,
+                        "explanation": f"Cryptographically signed via C2PA Content Credentials, confirming authentic hardware capture (signed by: {signer}).",
+                        "degraded": False
+                    })
                 return
 
         # ── SEGMENT B: CPU->GPU GATE ──

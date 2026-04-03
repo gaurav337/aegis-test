@@ -59,10 +59,25 @@ async def analyze_media(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e), "success": False})
 
+@app.middleware("http")
+async def add_no_cache_header(request: Request, call_next):
+    response = await call_next(request)
+    # Prevent browser caching of static files like HTML, CSS, JS during development
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
 # Mount frontend
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
 
 if __name__ == "__main__":
     import uvicorn
     # run with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True ./.venv_main/bin/python run_web.py`
-    uvicorn.run("run_web:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "run_web:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        reload=True,
+        reload_includes=["*.html", "*.css", "*.js"]
+    )

@@ -153,10 +153,15 @@ document.addEventListener("DOMContentLoaded", () => {
                         let statusText = "ERROR";
 
                         if (res.success) {
-                            const realProb = 1.0 - res.score;
-                            const isRisk = realProb < 0.45;
-                            statusClass = isRisk ? "status-invalid" : "status-valid";
-                            statusText = isRisk ? "SUSPICIOUS" : "CLEAR";
+                            if (res.confidence === 0) {
+                                statusClass = "status-warning";
+                                statusText = "ABSTAINED";
+                            } else {
+                                const realProb = 1.0 - res.score;
+                                const isRisk = realProb < 0.45;
+                                statusClass = isRisk ? "status-invalid" : "status-valid";
+                                statusText = isRisk ? "SUSPICIOUS" : "CLEAR";
+                            }
                         }
 
                         const card = document.createElement('div');
