@@ -243,12 +243,12 @@ pass_face_gate?
 After CPU phase completes...
 
     cpu_results = [successful, non-error, non-ABSTAIN results]
-    decisive_results = [r for r if |r.score - 0.5| > 0.05]
+    decisive_results = [r for r if |r.score - 0.5| > 0.15]   ← code uses 0.15 (README previously said 0.05)
                                    ↑
                          Filters out neutral-score (0.5)
                          tools that don't know direction
 
-    if len(decisive_results) < 2:
+    if len(decisive_results) < 3:          ← code uses 3 (README previously said 2)
         gate_decision = "FULL_GPU"   ← not enough signal
     else:
         Directional Confidence Math:
@@ -267,6 +267,7 @@ After CPU phase completes...
 
         if agg_conf > 0.93 AND unison AND |domains| ≥ 2:
             gate_decision = "HALT"         ← skip GPU entirely
+            (Note: domain check is incorporated into unison_agreement flag in code)
         elif agg_conf ≥ 0.80:
             gate_decision = "MINIMAL_GPU"  ← one GPU tool only (UnivFD)
         else:
@@ -355,7 +356,7 @@ gate_decision ≠ HALT?
 | `run_geometry` | `geometry_tool.py` | 0.08 | Supporter | Anthropometric distortion | IPD, philtrum, vertical thirds (MediaPipe 468-pt) |
 | `run_illumination` | `illumination_tool.py` | 0.04 | Supporter | Lighting inconsistency | Gradient-based directional light analysis |
 | `run_corneal` | `corneal_tool.py` | 0.04 | Supporter | Missing/mismatched catchlights | Bilateral reflection detection + divergence score |
-| `run_rppg` | `rppg_tool.py` | 0.06 | Supporter | Absent biological signal | POS rPPG + FFT (0.7–4 Hz cardiac band) |
+| `run_rppg` | `rppg_tool.py` | 0.06 | Supporter | Absent biological signal | POS rPPG + FFT (0.7–2.5 Hz cardiac band) ⚠️ |
 
 > **Supporters** inform the weighted average but cannot unilaterally override GPU specialist verdicts. rPPG is video-only.
 
@@ -496,7 +497,7 @@ _run_inference()
 
         Extract POS signals for 3 ROIs:
           forehead, left_cheek, right_cheek
-          Hair occlusion guard (Laplacian variance > 35.0 → ABSTAIN)
+           Hair occlusion guard (Laplacian variance > RPPG_HAIR_OCCLUSION_VARIANCE → ABSTAIN) ⚠️ threshold=0.25 (see Known Issues)
           Darkness guard (mean < 50 → return None)
 
         _evaluate_liveness():
@@ -505,7 +506,7 @@ _run_inference()
           SYNTHETIC_FLATLINE (< 2 ROIs with variance)
           WEAK_PULSE_FAILED  (only 1 ROI passes)
           INCOHERENT    (peaks don't synchronize)
-          PULSE_PRESENT (≥2 ROIs coherent within 0.05 Hz)
+          PULSE_PRESENT (≥2 ROIs coherent within 0.5 Hz — RPPG_COHERENCE_THRESHOLD_HZ)
 
 Best face by confidence wins. Returns ToolResult with liveness_label.
 ```
@@ -670,7 +671,7 @@ cp .env.example .env
 | `SBI_BLIND_SPOT_THRESHOLD` | 0.50 | SBI score below this → abstain |
 | `FREQNET_BLIND_SPOT_THRESHOLD` | 0.45 | FreqNet score below this → abstain |
 | `RPPG_CARDIAC_BAND_MIN_HZ` | 0.7 | Lower bound of cardiac frequency (42 BPM) |
-| `RPPG_CARDIAC_BAND_MAX_HZ` | 4.0 | Upper bound of cardiac frequency (240 BPM) |
+| `RPPG_CARDIAC_BAND_MAX_HZ` | 2.5 | Upper bound of cardiac frequency (150 BPM) ⚠️ README previously stated 4.0 Hz |
 
 ---
 
@@ -813,6 +814,110 @@ CLIP-ViT-L/14 (~890 MB) auto-downloads from HuggingFace on first run.
   booktitle={CVPR}, year={2020}
 }
 ```
+
+---
+
+## ⚠️ Known Issues & Discrepancies (Verified April 2026)
+
+> These are documented, verified discrepancies between code, configuration, and documentation. They are tracked here for transparency.
+
+### Critical Bugs
+
+| # | File | Issue | Impact | Status |
+|---|---|---|---|---|
+| 1 | `core/llm.py:100` | `logger` is never imported — `NameError` on LLM timeout (queue.Empty after 300s) | Pipeline crashes if LLM times out | **Needs fix** |
+| 2 | `utils/thresholds.py:121` | `RPPG_HAIR_OCCLUSION_VARIANCE = 0.25` but README/code comments say 35.0 — Laplacian variance is typically 30-200+ | Nearly every frame triggers false hair occlusion → rPPG abstains unnecessarily | **Needs fix** |
+| 3 | `utils/thresholds.py:120` | `RPPG_CARDIAC_BAND_MAX_HZ = 2.5` (150 BPM) but README documents 4.0 (240 BPM) | Cardiac peaks above 150 BPM are missed | **Needs fix** |
+| 4 | `run_web.py:30` | `file.filename` used directly without sanitization — path traversal possible | Security vulnerability: `../../etc/passwd` could write outside upload dir | **Needs fix** |
+
+### Configuration Inconsistencies
+
+| Setting | `config.py` default | `thresholds.py` value | Notes |
+|---|---|---|---|
+| `AGENT_MAX_RETRIES` | 2 | 3 | Two separate default sources |
+| `LLM_MAX_TOKENS` | 1024 | 512 | Two separate default sources |
+
+### Documentation vs. Code Discrepancies
+
+| Item | README says | Code actually uses | File:Line |
+|---|---|---|---|
+| Decisive threshold | `\|score - 0.5\| > 0.05` | `\|score - 0.5\| > 0.15` | `agent.py:168` |
+| Gate decisive count | `< 2` → FULL_GPU | `< 3` → FULL_GPU | `agent.py:174` |
+| rPPG cardiac band max | 4.0 Hz (240 BPM) | 2.5 Hz (150 BPM) | `thresholds.py:120` |
+| rPPG hair occlusion | 35.0 | 0.25 | `thresholds.py:121` |
+
+### Weight Mismatches (registry.py vs. thresholds.py)
+
+The ensemble scorer uses `thresholds.py` weights; the `EarlyStoppingController` uses `registry.py` weights. These differ:
+
+| Tool | `registry.py` | `thresholds.py` |
+|---|---|---|
+| `run_dct` | 0.07 | 0.04 |
+| `run_geometry` | 0.18 | 0.08 |
+| `run_illumination` | 0.05 | 0.04 |
+| `run_corneal` | 0.07 | 0.04 |
+| `run_univfd` | 0.20 | 0.22 |
+| `run_sbi` | 0.20 | 0.25 |
+| `run_freqnet` | 0.09 | 0.10 |
+
+### Security Notes
+
+- No authentication or rate limiting on `/api/analyze`
+- No filename sanitization (path traversal risk)
+- No file cleanup after analysis (disk exhaustion risk)
+- No upload collision handling (same filename overwrites)
+
+---
+
+## ⚠️ Known Issues & Discrepancies (Verified April 2026)
+
+> These are documented, verified discrepancies between code, configuration, and documentation. They are tracked here for transparency.
+
+### Critical Bugs
+
+| # | File | Issue | Impact | Status |
+|---|---|---|---|---|
+| 1 | `core/llm.py:100` | `logger` is never imported — `NameError` on LLM timeout (queue.Empty after 300s) | Pipeline crashes if LLM times out | **Needs fix** |
+| 2 | `utils/thresholds.py:121` | `RPPG_HAIR_OCCLUSION_VARIANCE = 0.25` but README/code comments say 35.0 — Laplacian variance is typically 30-200+ | Nearly every frame triggers false hair occlusion → rPPG abstains unnecessarily | **Needs fix** |
+| 3 | `utils/thresholds.py:120` | `RPPG_CARDIAC_BAND_MAX_HZ = 2.5` (150 BPM) but README documents 4.0 (240 BPM) | Cardiac peaks above 150 BPM are missed | **Needs fix** |
+| 4 | `run_web.py:30` | `file.filename` used directly without sanitization — path traversal possible | Security vulnerability: `../../etc/passwd` could write outside upload dir | **Needs fix** |
+
+### Configuration Inconsistencies
+
+| Setting | `config.py` default | `thresholds.py` value | Notes |
+|---|---|---|---|
+| `AGENT_MAX_RETRIES` | 2 | 3 | Two separate default sources |
+| `LLM_MAX_TOKENS` | 1024 | 512 | Two separate default sources |
+
+### Documentation vs. Code Discrepancies
+
+| Item | README says | Code actually uses | File:Line |
+|---|---|---|---|
+| Decisive threshold | `\|score - 0.5\| > 0.05` | `\|score - 0.5\| > 0.15` | `agent.py:168` |
+| Gate decisive count | `< 2` → FULL_GPU | `< 3` → FULL_GPU | `agent.py:174` |
+| rPPG cardiac band max | 4.0 Hz (240 BPM) | 2.5 Hz (150 BPM) | `thresholds.py:120` |
+| rPPG hair occlusion | 35.0 | 0.25 | `thresholds.py:121` |
+
+### Weight Mismatches (registry.py vs. thresholds.py)
+
+The ensemble scorer uses `thresholds.py` weights; the `EarlyStoppingController` uses `registry.py` weights. These differ:
+
+| Tool | `registry.py` | `thresholds.py` |
+|---|---|---|
+| `run_dct` | 0.07 | 0.04 |
+| `run_geometry` | 0.18 | 0.08 |
+| `run_illumination` | 0.05 | 0.04 |
+| `run_corneal` | 0.07 | 0.04 |
+| `run_univfd` | 0.20 | 0.22 |
+| `run_sbi` | 0.20 | 0.25 |
+| `run_freqnet` | 0.09 | 0.10 |
+
+### Security Notes
+
+- No authentication or rate limiting on `/api/analyze`
+- No filename sanitization (path traversal risk)
+- No file cleanup after analysis (disk exhaustion risk)
+- No upload collision handling (same filename overwrites)
 
 ---
 

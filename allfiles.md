@@ -1,10 +1,10 @@
-# Aegis-X — Complete Repository Documentation — v3.0
+# Aegis-X — Complete Repository Documentation — v3.1
 
-> **Verified against live codebase — April 2026.**
+> **Verified against live codebase — April 2026 (Second Pass — Zero False Positives).**
 > Every class, method, threshold, and behaviour described below has been manually checked against the actual source files.
-> Previous v2 stubs ("See original allfiles.md") have been replaced with full documentation.
+> Previous v2 stubs ("See original.allfiles.md") have been replaced with full documentation.
 >
-> **v3.0 changes** — Dual-pipeline architecture with Face Gate, CPU→GPU Gate (directional confidence), per-tool timeouts, `_make_error_result` DRY factory, `max_confidence` tracking ratio, rPPG face-window guard.
+> **v3.1 changes** — Added verified bug list, corrected weight discrepancies, fixed threshold documentation, added security notes.
 
 ---
 
@@ -24,6 +24,69 @@
 | `diagnostics_day14.py` | Listed | **Does not exist** |
 | `requirements.txt` | Single file | **Split into** `requirements-main.txt` + `requirements-gpu.txt` |
 | UnivFD VRAM loaded | ~1.8 GB | **GPU_VRAM_REQUIREMENTS says 0.6 GB** (pre-flight check); actual CLIP peak ~1.8 GB |
+
+---
+
+## ⚠️ Verified Bugs & Known Discrepancies (April 2026 Second Pass)
+
+> These are confirmed, zero-false-positive issues found by line-by-line code audit.
+
+### Critical Bugs (Will Cause Runtime Failures or Wrong Results)
+
+| # | File:Line | Bug | Impact |
+|---|---|---|---|
+| 1 | `llm.py:100` | `logger` undefined — `NameError` on LLM timeout | Pipeline crashes on LLM timeout |
+| 2 | `thresholds.py:121` | `RPPG_HAIR_OCCLUSION_VARIANCE = 0.25` (should be ~35.0) | False hair occlusion on every frame |
+| 3 | `thresholds.py:120` | `RPPG_CARDIAC_BAND_MAX_HZ = 2.5` (README says 4.0) | Misses cardiac peaks > 150 BPM |
+| 4 | `run_web.py:30` | Path traversal via unsanitized filename | Security vulnerability |
+| 5 | `registry.py` vs `thresholds.py` | 7 tool weights mismatch between files | Early stopping uses different weights than ensemble |
+
+### Configuration Inconsistencies
+
+| Setting | `config.py` default | `thresholds.py` value |
+|---|---|---|
+| `AGENT_MAX_RETRIES` | 2 | 3 |
+| `LLM_MAX_TOKENS` | 1024 | 512 |
+
+### Documentation vs. Code Discrepancies
+
+| Item | README says | Code actually uses | File:Line |
+|---|---|---|---|
+| Decisive threshold | `\|score - 0.5\| > 0.05` | `\|score - 0.5\| > 0.15` | `agent.py:168` |
+| Gate decisive count | `< 2` → FULL_GPU | `< 3` → FULL_GPU | `agent.py:174` |
+| rPPG cardiac band max | 4.0 Hz (240 BPM) | 2.5 Hz (150 BPM) | `thresholds.py:120` |
+| rPPG hair occlusion | 35.0 | 0.25 | `thresholds.py:121` |
+
+### Weight Mismatches (registry.py vs. thresholds.py)
+
+| Tool | `registry.py` | `thresholds.py` |
+|---|---|---|
+| `run_dct` | 0.07 | 0.04 |
+| `run_geometry` | 0.18 | 0.08 |
+| `run_illumination` | 0.05 | 0.04 |
+| `run_corneal` | 0.07 | 0.04 |
+| `run_univfd` | 0.20 | 0.22 |
+| `run_sbi` | 0.20 | 0.25 |
+| `run_freqnet` | 0.09 | 0.10 |
+
+### Security Notes
+
+- No authentication or rate limiting on `/api/analyze`
+- No filename sanitization (path traversal risk)
+- No file cleanup after analysis (disk exhaustion risk)
+- No upload collision handling (same filename overwrites)
+
+### Code Quality Issues
+
+| # | File:Line | Issue |
+|---|---|---|
+| 1 | `run_web.py:18` | `cpu_tools` list is dead code |
+| 2 | `run_web.py:23` | Duplicate `JSONResponse` import |
+| 3 | `config.py:36` | `clip_adapter_weights` references non-existent file |
+| 4 | `thresholds.py:271` | Duplicate `RPPG_COHERENCE_THRESHOLD_HZ` definition |
+| 5 | `llm.py:107,112` | `AgentEvent` imported inside function body |
+| 6 | `memory.py` | Entire `MemorySystem` is unused in web pipeline |
+| 7 | `registry.py:362` | Circuit breaker uses `time.time()` instead of `time.monotonic()` |
 
 ---
 
@@ -106,20 +169,20 @@ aegis-x/
 
 ## Tool Manifest (Actual — from registry.py lines 78–89)
 
-> **Note:** Registry weights sum to **1.12**, not 1.00. The `thresholds.py` constants (WEIGHT_*) reflect older values. The registry is the authoritative runtime source.
+> **Note:** Registry weights sum to **1.12**, not 1.00. The `thresholds.py` constants (WEIGHT_*) reflect different values. The registry is the authoritative runtime source for `ToolSpec` metadata, but the ensemble scorer (`utils/ensemble.py`) uses `WEIGHT_MAP` from `thresholds.py`. This means early stopping and ensemble scoring use **different weight values** for the same tools.
 
 | Tool name | Registry Weight | thresholds.py Weight | Category | Trust Tier | GPU? |
 |---|---|---|---|---|---|
 | `check_c2pa` | 0.05 | — | PROVENANCE | 1 | No |
-| `run_dct` | 0.07 | 0.07 | FREQUENCY | 2 | No |
+| `run_dct` | 0.07 | 0.04 | FREQUENCY | 2 | No |
 | `run_rppg` | 0.06 | 0.06 | BIOLOGICAL | 2 | No |
-| `run_geometry` | 0.18 | 0.18 | GEOMETRIC | 3 | No |
-| `run_illumination` | 0.05 | 0.05 | FREQUENCY | 1 | No |
-| `run_corneal` | 0.07 | 0.07 | BIOLOGICAL | 2 | No |
-| `run_univfd` | **0.20** | 0.15 | SEMANTIC | 3 | Yes (proxy) |
-| `run_xception` | **0.15** | 0.10 | SEMANTIC | 2 | Yes (proxy) |
-| `run_sbi` | **0.20** | 0.18 | GENERATIVE | 3 | Yes (proxy) |
-| `run_freqnet` | 0.09 | 0.09 | FREQUENCY | 1 | Yes (proxy) |
+| `run_geometry` | 0.18 | 0.08 | GEOMETRIC | 3 | No |
+| `run_illumination` | 0.05 | 0.04 | FREQUENCY | 1 | No |
+| `run_corneal` | 0.07 | 0.04 | BIOLOGICAL | 2 | No |
+| `run_univfd` | **0.20** | 0.22 | SEMANTIC | 3 | Yes (proxy) |
+| `run_xception` | **0.15** | 0.15 | SEMANTIC | 2 | Yes (proxy) |
+| `run_sbi` | **0.20** | 0.25 | GENERATIVE | 3 | Yes (proxy) |
+| `run_freqnet` | 0.09 | 0.10 | FREQUENCY | 1 | Yes (proxy) |
 
 > GPU tools are wrapped in `SubprocessToolProxy` — they never directly load PyTorch in `.venv_main`.
 
@@ -264,14 +327,14 @@ No methods — plain data container for SSE.
    C2PA short-circuit: if c2pa_verified → return REAL immediately
 
 4. SEGMENT B — CPU→GPU Gate:
-   decisive_results = [r where |score - 0.5| > 0.05]
-   If len < 2 → FULL_GPU
+   decisive_results = [r where |score - 0.5| > 0.15]  ← code uses 0.15 (not 0.05)
+   If len < 3 → FULL_GPU                               ← code uses 3 (not 2)
    Else:
      direction_i = (score_i - 0.5) × 2
      agg_direction = Σ direction_i × confidence_i × normalized_weight_i
      agg_conf = |agg_direction|
      unison = all decisive_results agree on direction
-     domains from {bio(rPPG), phys(geometry), freq(dct), auth(c2pa)}
+     domains from {bio(rPPG), phys(geometry), freq(dct), auth(c2pa), bio_corn(corneal), illum(illumination)}
      unison_agreement = unison AND len(domains) ≥ 2
      HALT if agg_conf > 0.93 AND unison_agreement
      MINIMAL_GPU if agg_conf ≥ 0.80
@@ -382,9 +445,14 @@ Thin wrapper around the Ollama REST API (`/api/generate`).
 | Function/Class | What it does |
 |---|---|
 | `stream_completion(prompt, temperature, max_tokens)` | Async generator — yields string tokens from Ollama streaming response |
-| `OllamaClient` | Configurable client with endpoint, model name, retry logic |
+| `generate_verdict(ensemble_score, tool_results, verdict)` | **Sync generator** — bridges async OllamaClient via `threading.Thread` + `queue.Queue`. Yields `AgentEvent("llm_stream")` tokens, returns full explanation string |
+| `OllamaClient` | Configurable async client with endpoint, model name, retry logic, health checks |
 
-Uses `aiohttp` for async HTTP. Temperature hardcoded to 0.1 by default (deterministic forensic output).
+**⚠️ Critical Bug at line 100:** `logger.error("LLM generation timed out")` references `logger` which is **never imported or defined** in this module. When the LLM times out (queue.Empty after 300s), this raises `NameError: name 'logger' is not defined`. The `from utils.logger import setup_logger` import is missing.
+
+Uses `httpx` for async HTTP. Temperature defaults to 0.1 (deterministic forensic output). `keep_alive=0` is set intentionally for low-VRAM systems (see `ollama_client.py:88`).
+
+**Architecture note:** `generate_verdict()` creates a new thread per call with `threading.Thread(target=async_runner)`, then blocks on `t.join()`. This is effectively synchronous despite the async internals.
 
 ---
 
@@ -526,14 +594,14 @@ trust_tier 1 = lightweight, artifact-prone (c2pa, illumination, freqnet)
 **Key thresholds from `thresholds.py`:**
 ```
 RPPG_MIN_FRAMES = 90              # Skip if < 90 frames extracted
-RPPG_HAIR_OCCLUSION_VARIANCE = 0.25  # Laplacian variance threshold (NOTE: very low — see below)
+RPPG_HAIR_OCCLUSION_VARIANCE = 0.25  # ⚠️ BUG: Should be ~35.0 per code comments. Currently 0.25 causes false positives on nearly every frame.
 RPPG_CARDIAC_BAND_MIN_HZ = 0.7   # 42 BPM
-RPPG_CARDIAC_BAND_MAX_HZ = 2.5   # 150 BPM (not 4.0 Hz as README states)
+RPPG_CARDIAC_BAND_MAX_HZ = 2.5   # 150 BPM (⚠️ README documents 4.0 Hz / 240 BPM — code uses 2.5)
 RPPG_COHERENCE_THRESHOLD_HZ = 0.5 # Max inter-ROI peak difference for PULSE_PRESENT
 RPPG_SNR_THRESHOLD = 3.0         # Min spectral_concentration for "good" ROI
 ```
 
-> ⚠️ **RPPG_HAIR_OCCLUSION_VARIANCE = 0.25** in thresholds.py but `_evaluate_liveness` hardcodes the comment "variance > 35.0 indicates hair texture". The `_check_hair_occlusion` method uses `RPPG_HAIR_OCCLUSION_VARIANCE` which is 0.25 — nearly every non-black ROI will trigger this. This is a latent discrepancy between thresholds and code comments.
+> ⚠️ **RPPG_HAIR_OCCLUSION_VARIANCE = 0.25** in thresholds.py but `_evaluate_liveness` hardcodes the comment "variance > 35.0 indicates hair texture". The `_check_hair_occlusion` method uses `RPPG_HAIR_OCCLUSION_VARIANCE` which is 0.25 — nearly every non-black ROI will trigger this. **Confirmed bug: threshold is ~100x too low.**
 
 | Method | What it does |
 |---|---|
@@ -807,10 +875,15 @@ Loads `freqnet_fad_baseline.pt` for Z-score normalization. Falls back to hardcod
 
 Key groups:
 - Hardware/VRAM: `VRAM_MIN_FOR_GPU=3.5`, `VRAM_RESERVED_BUFFER_GB=1.0`
-- Ensemble weights (older values — registry.py overrides at runtime)
-- Decision thresholds: `ENSEMBLE_REAL_THRESHOLD=0.40`, `ENSEMBLE_FAKE_THRESHOLD=0.60`
+- Ensemble weights (used by ensemble.py — different from registry.py weights)
+- Decision thresholds: `ENSEMBLE_REAL_THRESHOLD=0.50`, `ENSEMBLE_FAKE_THRESHOLD=0.50`
 - Per-tool: DCT, Geometry, Illumination, Corneal, rPPG, SBI, FreqNet, UnivFD, Xception, C2PA
-- Agent: `EARLY_STOP_CONFIDENCE=0.75`, `SUSPICION_OVERRIDE_THRESHOLD=0.50`
+- Agent: `EARLY_STOP_CONFIDENCE=0.75`, `SUSPICION_OVERRIDE_THRESHOLD=0.70`
+
+**⚠️ Critical bugs in this file:**
+- Line 120: `RPPG_CARDIAC_BAND_MAX_HZ = 2.5` (README documents 4.0 Hz)
+- Line 121: `RPPG_HAIR_OCCLUSION_VARIANCE = 0.25` (code comments say 35.0 — ~100x too low)
+- Line 271: `RPPG_COHERENCE_THRESHOLD_HZ = 0.5` duplicate of line 123 (harmless but redundant)
 
 **`ThresholdConfig` (dataclass, frozen):** `real_threshold=0.15`, `fake_threshold=0.85` — used by ESC, not ensemble.
 
@@ -820,7 +893,7 @@ Key groups:
 
 **Important:** Uses `WEIGHT_MAP` from `thresholds.py` — **NOT** the registry weights. This is the weight discrepancy source.
 
-**`WEIGHT_MAP`** (from thresholds): univfd=0.15, xception=0.10, sbi=0.18 — different from registry (0.20/0.15/0.20).
+**`WEIGHT_MAP`** (from thresholds): univfd=0.22, xception=0.15, sbi=0.25, freqnet=0.10, rppg=0.06, dct=0.04, geometry=0.08, illumination=0.04, corneal=0.04 — different from registry (0.20/0.15/0.20/0.09/0.06/0.07/0.18/0.05/0.07).
 
 **Classes:** `EnsembleAggregator`
 
@@ -828,7 +901,7 @@ Key groups:
 |---|---|
 | `add_result(result)` | Appends `ToolResult` to `tool_results` dict |
 | `get_final_score()` | Calls `calculate_ensemble_score()` |
-| `get_verdict()` | "FAKE" if score ≤ ENSEMBLE_REAL_THRESHOLD (0.40), else "REAL" |
+| `get_verdict()` | "FAKE" if score ≤ ENSEMBLE_REAL_THRESHOLD (0.50), else "REAL" |
 | `calculate_ensemble_score(results)` | Full 4-step scoring pipeline |
 
 **`calculate_ensemble_score()` — 4-step pipeline:**
@@ -853,12 +926,26 @@ Step 3: Route each tool via _route()
            compression discount applied if DCT flag set
   Others:  score × weight direct
 
-Step 4: Suspicion Overdrive
-  max_prob = max(GPU specialists' implied fake probs)
-  if max_prob > SUSPICION_OVERRIDE_THRESHOLD (0.50):
-      fake_score = max_prob  # hard max-pool override
-  else:
-      fake_score = weighted_average
+Step 4: Three-Pronged Anomaly Shield
+  PRONG 1 — Suspicion Overdrive:
+    max_gpu_prob = max(GPU specialists' implied fake probs)
+    gpu_spread = max_gpu_prob - min_gpu_prob
+    if max_gpu_prob > SUSPICION_OVERRIDE_THRESHOLD (0.70):
+      if gpu_spread > 0.30 AND len(gpu_specialists) >= 2:
+        fake_score = weighted_average  # conflict → fallback
+      else:
+        fake_score = max_gpu_prob      # hard max-pool override
+
+  PRONG 2 — Borderline Consensus:
+    borderline = [p for p in gpu_probs if 0.35 <= p <= 0.55]
+    if len(borderline) >= 2:
+      consensus_anchor = mean(borderline) * 1.25
+
+  PRONG 3 — GPU Coverage Degradation:
+    for each abstained GPU specialist:
+      gpu_degradation_boost *= (1.0 + 0.10)
+
+  Final: fake_score = max(base_ensemble, anomaly_anchor, consensus_anchor) * degradation_boost
 
 ensemble_score = 1.0 - fake_score
 ```
@@ -1047,7 +1134,7 @@ Video path:
 | 60s GPU timeouts | `agent.py` | `ThreadPoolExecutor` wrapping `run_with_vram_cleanup` |
 | Face Gate implemented | `agent.py` | 4-dimension routing decision |
 | Directional confidence gate | `agent.py` | `(score-0.5)×2` signed math replaces magnitude |
-| `decisive_results` filter | `agent.py` | Excludes `|score-0.5| ≤ 0.05` from gate |
+| `decisive_results` filter | `agent.py` | Excludes `|score-0.5| ≤ 0.15` from gate (code uses 0.15, not 0.05) |
 | `DEGRADED` propagation | `agent.py` | Now in VERDICT event + return dict |
 | Closure-safe GPU lambdas | `agent.py` | `make_loader(t)` / `make_inference(data)` factories |
 | Per-model VRAM dict | `agent.py` | `GPU_VRAM_REQUIREMENTS` replaces hardcoded 0.6 |

@@ -200,7 +200,7 @@ def run_with_vram_cleanup(tool_loader, inference_fn, model_name, required_vram_g
   - Semantic coherence issues (hands, text, backgrounds)
   - Frequency domain artifacts from upsampling
 
-**Weight in ensemble:** 0.22 (Decider — Tier 3 trust)
+**Weight in ensemble:** 0.22 (thresholds.py) / 0.20 (registry.py) — Decider — Tier 3 trust
 
 ---
 
@@ -212,7 +212,7 @@ def run_with_vram_cleanup(tool_loader, inference_fn, model_name, required_vram_g
 ```
 1. Face tracking → Extract ROI (region of interest) on forehead/cheeks
 2. Color channel separation → Track RGB intensity over time
-3. Bandpass filtering → Isolate cardiac frequency band (0.7-4 Hz = 42-240 BPM)
+3. Bandpass filtering → Isolate cardiac frequency band (0.7-2.5 Hz = 42-150 BPM) ⚠️ Code uses 2.5 Hz, not 4.0 Hz
 4. FFT (Fast Fourier Transform) → Find dominant frequency
 5. Peak detection → Check if clear heartbeat signal exists
 ```
@@ -227,6 +227,8 @@ def run_with_vram_cleanup(tool_loader, inference_fn, model_name, required_vram_g
 RPPG_PULSE_THRESHOLD_LOW = 0.3   # Below = no pulse detected
 RPPG_PULSE_THRESHOLD_HIGH = 0.7  # Above = strong pulse
 RPPG_NO_PULSE_IMPLIED_PROB = 0.85 # Implied fake probability if no pulse
+RPPG_CARDIAC_BAND_MAX_HZ = 2.5   # ⚠️ Code uses 2.5 Hz (150 BPM), README documents 4.0 Hz (240 BPM)
+RPPG_HAIR_OCCLUSION_VARIANCE = 0.25  # ⚠️ BUG: Should be ~35.0 — currently causes false positives
 ```
 
 **Limitation:** Only works on videos with visible skin, good lighting
@@ -255,7 +257,7 @@ RPPG_NO_PULSE_IMPLIED_PROB = 0.85 # Implied fake probability if no pulse
 5. Score based on symmetry and presence
 ```
 
-**Weight:** 0.04 (Supporter — Tier 1)
+**Weight:** 0.04 (thresholds.py) / 0.07 (registry.py) — Supporter — Tier 2
 
 ---
 
@@ -338,7 +340,7 @@ if univfd_score > SBI_SKIP_UNIVFD_THRESHOLD:
 # Score deviations as suspicious
 ```
 
-**Weight:** 0.08 (Supporter — Tier 1, demoted from 0.20 in v4.0)
+**Weight:** 0.08 (thresholds.py) / 0.18 (registry.py) — Supporter — Tier 3 (registry)
 
 > **v4.0**: Geometry was demoted from Decider (0.20) to Supporter (0.08) because noisy CPU heuristics were overriding GPU deep-learning models, causing false positives on real images with chaotic lighting.
 
@@ -362,10 +364,10 @@ ensemble_real_score = 1.0 - ensemble_fake_score
 **Key features:**
 1. **Confidence weighting**: Higher confidence tools get more influence
 2. **Context-aware routing**: Some tools abstain based on conditions (e.g., SBI skips if no compression detected)
-3. **Suspicion overdrive**: If any GPU specialist exceeds `SUSPICION_OVERRIDE_THRESHOLD` (0.70), use max-pooling — but only after GPU Conflict Guard verifies specialists agree (spread ≤ 0.30)
+3. **Suspicion overdrive (v4.0)**: If any GPU specialist exceeds `SUSPICION_OVERRIDE_THRESHOLD` (0.70), use max-pooling — but only after GPU Conflict Guard verifies specialists agree (spread ≤ 0.30)
 4. **Borderline Consensus**: If ≥2 GPU specialists cluster in [0.35, 0.55], their mean is boosted 1.25×
 5. **GPU Coverage Degradation**: Each abstained GPU specialist applies +10% boost to fake_score
-4. **Compression discounts**: DCT-detected compression reduces SBI/FreqNet weights (artifacts may be from JPEG, not deepfake)
+6. **Compression discounts**: DCT-detected compression reduces SBI/FreqNet weights (artifacts may be from JPEG, not deepfake)
 
 **Follow-up:** Why convert to "real probability" at the end?
 - Forensic convention: 0 = fake, 1 = real is more intuitive for investigators
@@ -394,11 +396,12 @@ Simple average: (0.95 + 0.10 + 0.15) / 3 = 0.40 → "REAL" ❌ WRONG!
 
 **Solution (v4.0 — Three-Pronged):**
 ```python
-# Prong 1: Suspicion Overdrive
+# Prong 1: Suspicion Overdrive with GPU Conflict Guard
 max_prob = max(gpu_implied_probs)  # 0.95
 spread = max(gpu_implied_probs) - min(gpu_implied_probs)  # conflict check
 if max_prob > SUSPICION_OVERRIDE_THRESHOLD and spread <= 0.30:  # GPU agreement
     fake_score = max_prob  # Use 0.95, not 0.40
+# Note: SUSPICION_OVERRIDE_THRESHOLD = 0.70 in code (not 0.50 as some docs say)
 
 # Prong 2: Borderline Consensus
 borderline_specialists = [p for p in gpu_probs if 0.35 <= p <= 0.55]
@@ -2373,8 +2376,8 @@ Preprocessor
   └── ✗ No-Face Pipeline: [c2pa, dct]
 
   │
-  ▼ Segment B: decisive_results = [r for r if |score - 0.5| > 0.05]
-  ├── len < 2 → FULL_GPU
+  ▼ Segment B: decisive_results = [r for r if |score - 0.5| > 0.15]  ← code uses 0.15, not 0.05
+  ├── len < 3 → FULL_GPU                                               ← code uses 3, not 2
   └── else:
       agg_conf = |Σ direction × confidence × weight|
       unison = all decisive agree on direction
@@ -2494,7 +2497,7 @@ if r.tool_name == "check_c2pa": domains.add("auth")
 
 ---
 
-### Q61: What is `decisive_results`? Why filter on `|score - 0.5| > 0.05`?
+### Q61: What is `decisive_results`? Why filter on `|score - 0.5| > 0.15`?
 
 **What the interviewer is testing:** Edge case handling, spec compliance.
 
@@ -2507,18 +2510,18 @@ first_dir = cpu_results[0].score > 0.5
 # But 0.5 means "I don't know" — not REAL!
 
 # After v3.0:
-decisive_results = [r for r in cpu_results if abs(r.score - 0.5) > 0.05]
-# Threshold 0.05 = ±10% from center
+decisive_results = [r for r in cpu_results if abs(r.score - 0.5) > 0.15]
+# Threshold 0.15 = ±15% from center (code uses 0.15, not 0.05 as some docs say)
 # Only tools with actual directional opinion participate
 ```
 
-**Edge case:** What if `len(decisive_results) < 2`?
+**Edge case:** What if `len(decisive_results) < 3`?
 ```python
-if len(decisive_results) < 2:
+if len(decisive_results) < 3:
     gate_decision = "FULL_GPU"  # Not enough directional signal → run everything
 ```
 
-**Why 0.05 specifically?** Provides a "decision deadband" — tools that are 45–55% fake get excluded. Tools need to have at least a weak opinion to vote in the gate.
+**Why 0.15 specifically?** Provides a "decision deadband" — tools that are 35–65% fake get excluded. Tools need to have at least a moderate opinion to vote in the gate. **Note:** The code uses 0.15 (not 0.05 as earlier documentation stated). This makes the gate more conservative — fewer tools qualify as "decisive," which means the gate more often falls through to FULL_GPU, providing more thorough analysis.
 
 ---
 
@@ -2811,7 +2814,7 @@ core/tools/rppg_tool.py
 **You**:
 > "Two weeks before the v3.0 push, the CPU→GPU gate was sometimes skipping GPU analysis for strongly conflicted cases. The bug: tools with `score=0.5` (error/abstain) were being counted as 'voting REAL' in the unison check — `0.5 > 0.5` evaluates to False.
 >
-> Fix was one line: filter to `decisive_results = [r for r if |r.score - 0.5| > 0.05]` before running gate logic. Tools that don't have an opinion shouldn't get a vote.
+> Fix was one line: filter to `decisive_results = [r for r if |r.score - 0.5| > 0.15]` before running gate logic. Tools that don't have an opinion shouldn't get a vote.
 >
 > The lesson: neutral scores need to be explicitly excluded, not just ignored — because `score > threshold` with `threshold = 0.5` silently categorizes 0.5 as one direction."
 
@@ -2830,10 +2833,10 @@ core/tools/rppg_tool.py
 | Face gate min confidence | 0.60 | Tracking coverage ratio |
 | HALT threshold | 0.93 | Directional agg_conf |
 | MINIMAL_GPU threshold | 0.80 | Directional agg_conf |
-| Decisive results filter | ±0.05 | From score=0.5 center |
+| Decisive results filter | ±0.15 | From score=0.5 center (code uses 0.15, not 0.05) |
 | DEGRADED threshold | >50% | error tools / total tools |
-| rPPG hair variance | 35.0 | Laplacian occlusion guard |
-| Cardiac band | 0.7–4.0 Hz | 42–240 BPM |
+| rPPG hair variance | 0.25 ⚠️ | BUG: Should be ~35.0 per code comments — currently causes false positives |
+| Cardiac band | 0.7–2.5 Hz | 42–150 BPM (⚠️ code uses 2.5 Hz, not 4.0 Hz as some docs say) |
 
 ### 🧮 Key Equations
 
