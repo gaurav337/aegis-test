@@ -134,6 +134,8 @@ class ToolRegistry:
         self.failed_tools: Dict[str, str] = {}
         self._execution_counts: Dict[str, int] = {}
         self._total_execution_time: Dict[str, float] = {}
+        self._failure_streak: Dict[str, int] = {}
+        self._circuit_opened_until: Dict[str, float] = {}
         
         # NEW: Metadata registry for EarlyStoppingController
         self._metadata: Dict[str, ToolSpec] = _build_metadata_registry()
@@ -175,6 +177,8 @@ class ToolRegistry:
                     self.tools[tool_name] = instance
                     self._execution_counts[tool_name] = 0
                     self._total_execution_time[tool_name] = 0.0
+                    self._failure_streak[tool_name] = 0
+                    self._circuit_opened_until[tool_name] = 0.0
                     logger.debug(f"  Registered Proxy: {tool_name} ({class_name})")
                     continue
                 
@@ -220,6 +224,8 @@ class ToolRegistry:
                 self.tools[tool_name] = instance
                 self._execution_counts[tool_name] = 0
                 self._total_execution_time[tool_name] = 0.0
+                self._failure_streak[tool_name] = 0
+                self._circuit_opened_until[tool_name] = 0.0
                 logger.debug(f"  Registered: {tool_name} ({class_name})")
                 
             except ImportError as e:
@@ -281,6 +287,21 @@ class ToolRegistry:
         """
         tool = self.tools.get(name)
         
+        now = time.time()
+        if self._circuit_opened_until.get(name, 0.0) > now:
+            logger.warning(f"Circuit breaker tripped for {name}. Aborting execution.")
+            return ToolResult(
+                tool_name=name,
+                success=False,
+                score=0.5,
+                confidence=0.0,
+                details={"error_category": "CIRCUIT_BREAKER"},
+                error=True,
+                error_msg="Circuit breaker is explicitly open for this tool due to frequent failures.",
+                execution_time=0.0,
+                evidence_summary="Circuit breaker prevented execution to protect pipeline"
+            )
+            
         if tool is None:
             # Check if it was a failed registration
             if name in self.failed_tools:
@@ -304,61 +325,62 @@ class ToolRegistry:
         
         # Detect GPU tools
         is_gpu = getattr(tool, 'requires_gpu', False)
-        start = time.perf_counter()
         
-        try:
-            result = tool.execute(input_data)
-            
-            elapsed = time.perf_counter() - start
-            self._execution_counts[name] += 1
-            self._total_execution_time[name] += elapsed
-            
-            return result
-            
-        except Exception as e:
-            if HAS_TORCH and isinstance(e, torch.cuda.OutOfMemoryError):
-                logger.error(f"{name}: CUDA OOM — clearing cache and retrying")
-                torch.cuda.empty_cache()
+        max_retries = 3 if is_gpu else 1
+        attempt = 1
+        base_delay = 2.0
+        
+        while attempt <= max_retries:
+            start = time.perf_counter()
+            try:
+                result = tool.execute(input_data)
                 
-                try:
-                    result = tool.execute(input_data)
-                    elapsed = time.perf_counter() - start
-                    self._execution_counts[name] += 1
-                    self._total_execution_time[name] += elapsed
-                    return result
-                except Exception as retry_err:
+                # Check if underlying execution actually natively returned an error
+                if result.error:
+                    raise RuntimeError(result.error_msg)
+                
+                elapsed = time.perf_counter() - start
+                self._execution_counts[name] += 1
+                self._total_execution_time[name] += elapsed
+                
+                # Success - Reset circuit streak
+                self._failure_streak[name] = 0
+                return result
+                
+            except Exception as e:
+                if HAS_TORCH and isinstance(e, torch.cuda.OutOfMemoryError):
+                    logger.error(f"{name}: CUDA OOM — clearing cache.")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                
+                logger.error(f"{name} execution failed (attempt {attempt}/{max_retries}): {e}")
+                
+                if attempt == max_retries:
+                    self._failure_streak[name] = self._failure_streak.get(name, 0) + 1
+                    if self._failure_streak[name] >= 3:
+                        logger.error(f"Opening circuit breaker for {name} for 60 seconds")
+                        self._circuit_opened_until[name] = time.time() + 60.0
+                    
                     return ToolResult(
                         tool_name=name,
                         success=False,
-                        score=0.0,
-                        confidence=0.0,
-                        details={},
+                        score=0.5,
+                        confidence=0.1 if "Memory" in str(e) else 0.0,
+                        details={"error_category": "RESOURCE" if "Memory" in str(e) else "UNKNOWN"},
                         error=True,
-                        error_msg=f"OOM even after cache clear: {retry_err}",
+                        error_msg=f"Execution failed after {max_retries} attempts: {e}",
                         execution_time=time.perf_counter() - start,
-                        evidence_summary=f"OOM even after cache clear: {retry_err}"
+                        evidence_summary=f"Failed: {type(e).__name__}"
                     )
-            # Generic execution failure:
-            logger.error(f"{name} execution failed: {e}", exc_info=True)
                 
-            # Fallthrough for Generic exception is handled above!
-            logger.error(f"{name} execution failed: {e}", exc_info=True)
-            return ToolResult(
-                tool_name=name,
-                success=False,
-                score=0.0,
-                confidence=0.0,
-                details={},
-                error=True,
-                error_msg=f"Execution failed: {type(e).__name__}: {e}",
-                execution_time=time.perf_counter() - start,
-                evidence_summary=f"Execution failed: {type(e).__name__}: {e}"
-            )
-            
-        finally:
-            # Prevent VRAM fragmentation between tool calls
-            if is_gpu and HAS_TORCH and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                logger.warning(f"Retrying {name} in {base_delay * (2 ** (attempt - 1))}s")
+                time.sleep(base_delay * (2 ** (attempt - 1)))
+                attempt += 1
+                
+            finally:
+                # Prevent VRAM fragmentation between tool calls & retry attempts
+                if is_gpu and HAS_TORCH and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
     
     def get_tool_names(self) -> List[str]:
         """Return names of all successfully registered tools."""

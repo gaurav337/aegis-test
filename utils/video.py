@@ -21,10 +21,45 @@ from utils.thresholds import (
 import math
 import cv2
 import numpy as np
+import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Iterable
 
 from utils.logger import setup_logger
+
+class DiskBackedFrameList:
+    """Disk-backed array cache to prevent OOM on long video processing."""
+    def __init__(self):
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._length = 0
+        self._paths = []
+
+    def append(self, frame: np.ndarray):
+        path = f"{self._temp_dir.name}/frame_{self._length}.npy"
+        np.save(path, frame)
+        self._paths.append(path)
+        self._length += 1
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return [np.load(self._paths[i]) for i in range(*idx.indices(self._length))]
+        return np.load(self._paths[idx])
+
+    def __len__(self):
+        return self._length
+        
+    def __iter__(self):
+        for path in self._paths:
+            yield np.load(path)
+            
+    def cleanup(self):
+        try:
+            self._temp_dir.cleanup()
+        except Exception:
+            pass
+
+    def __del__(self):
+        self.cleanup()
 
 logger = setup_logger(__name__)
 
@@ -117,10 +152,10 @@ def extract_frames(video_path: str, max_frames: int = 300, target_fps: int = 30)
                 current_index += skip_interval
                 
             if not indices:
-                return []
+                return DiskBackedFrameList()
                 
             # Batch extraction
-            frames_list = []
+            frames_list = DiskBackedFrameList()
             batch_size = GPU_DECODE_BATCH_SIZE if use_gpu_decode else CPU_DECODE_BATCH_SIZE
             
             for i in range(0, len(indices), batch_size):
@@ -186,7 +221,7 @@ def _extract_cv2(video_path: str, max_frames: int, target_fps: int) -> List[np.n
     fps_ratio = source_fps / target_fps
     skip_interval = max(1.0, fps_ratio)
     
-    frames_list = []
+    frames_list = DiskBackedFrameList()
     frame_idx = 0
     current_target = 0.0
     

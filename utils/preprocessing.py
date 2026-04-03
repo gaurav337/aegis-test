@@ -229,6 +229,12 @@ class Preprocessor:
         )
         self.tracker = SortTracker()
         
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        
     def close(self):
         if hasattr(self, 'face_mesh') and self.face_mesh is not None:
             try:

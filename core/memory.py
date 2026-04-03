@@ -398,29 +398,29 @@ class MemorySystem:
                 all_keys_set.update(case["tool_scores_dict"].keys())
             all_keys = sorted(all_keys_set)
             
-            inserted = 0
-            skipped = 0
-            
+            insert_batch = []
             for case in cases:
                 case_id = str(uuid.uuid4())
                 timestamp = datetime.now(timezone.utc).isoformat()
                 metadata_json = json.dumps(case.get("metadata")) if case.get("metadata") else None
+                insert_batch.append((
+                    case_id, timestamp, case["file_hash"], case["file_type"],
+                    case["verdict"], case["confidence"], case["ensemble"],
+                    json.dumps(case["tool_scores_dict"]),
+                    case["reasoning"], metadata_json
+                ))
                 
-                cursor.execute("""
-                    INSERT OR IGNORE INTO cases 
-                    (id, timestamp, file_hash, file_type, verdict, confidence,
-                     ensemble_score, tool_scores_json,
-                     reasoning, feedback_label, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-                """, (case_id, timestamp, case["file_hash"], case["file_type"],
-                      case["verdict"], case["confidence"], case["ensemble"],
-                      json.dumps(case["tool_scores_dict"]),
-                      case["reasoning"], metadata_json))
-                
-                if cursor.rowcount > 0:
-                    inserted += 1
-                else:
-                    skipped += 1
+            cursor.executemany("""
+                INSERT OR IGNORE INTO cases 
+                (id, timestamp, file_hash, file_type, verdict, confidence,
+                 ensemble_score, tool_scores_json,
+                 reasoning, feedback_label, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """, insert_batch)
+            
+            # rowcount under executemany tells us total successful inserts
+            inserted = cursor.rowcount if cursor.rowcount >= 0 else 0
+            skipped = len(cases) - inserted
             
             self._rebuild_global_stats(conn, all_keys)
             conn.commit()
