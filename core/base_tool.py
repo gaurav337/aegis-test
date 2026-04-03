@@ -65,14 +65,28 @@ class BaseForensicTool(ABC):
             error_msg = str(e)
             logger.error(f"Tool {self.tool_name} crashed during execution: {error_msg}")
             
+            score = 0.5
+            confidence = 0.0
+            error_category = "UNKNOWN"
+            
+            if "OutOfMemory" in type(e).__name__:
+                confidence = 0.1
+                error_category = "RESOURCE"
+            elif "Timeout" in type(e).__name__:
+                confidence = 0.2
+                error_category = "TIMEOUT"
+            elif "InvalidInput" in type(e).__name__ or "ValueError" in type(e).__name__:
+                confidence = 0.0
+                error_category = "INPUT"
+                
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=0.0,
-                confidence=0.0,
-                details={},
+                score=score,
+                confidence=confidence,
+                details={"error_category": error_category},
                 error=True,
                 error_msg=error_msg,
                 execution_time=execution_time,
-                evidence_summary=f"Tool {self.tool_name} failed: {error_msg}"
+                evidence_summary=f"Tool {self.tool_name} failed: [{error_category}] {error_msg}"
             )

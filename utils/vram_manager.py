@@ -300,7 +300,7 @@ class VRAMLifecycleManager:
     _accelerator_lock = threading.RLock()
     
     # Lock timeout to prevent permanent deadlock on hard crashes
-    _LOCK_TIMEOUT_SECONDS = 120.0
+    _LOCK_TIMEOUT_SECONDS = 30.0
     
     def __init__(self, model_loader_function, model_name="Unknown",
              required_vram_gb=2.0, loader_args=None, loader_kwargs=None):

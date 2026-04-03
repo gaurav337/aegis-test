@@ -192,26 +192,21 @@ class EarlyStoppingController:
         evidence_metrics["max_possible"] = max_possible_score
         evidence_metrics["min_possible"] = min_possible_score
 
-        # 7. Locked REAL Check (DISABLED)
-        # Classical tools (Lighting/Geometry) often score ~0.0 on high-quality generative fakes.
-        # This creates an artificial mathematical ceiling that blocks Neural Networks from running.
-        # To guarantee deepfake detection, we MUST force the pipeline to run all viable AI tools 
-        # before declaring the image AUTHENTIC.
-        # 
-        # if max_possible_score < self.fake_threshold and current_score < self.real_threshold:
-        #     if not self.high_trust_tools.intersection(valid_tools.keys()):
-        #         return StopDecision(
-        #             False,
-        #             StopReason.CONTINUE_SECURITY_REQUIRED,
-        #             current_score,
-        #             evidence_metrics=evidence_metrics
-        #         )
-        #     return StopDecision(
-        #         True,
-        #         StopReason.HALT_LOCKED_REAL,
-        #         1.0 - current_score,
-        #         evidence_metrics=evidence_metrics
-        #     )
+        # 7. Locked REAL Check 
+        if max_possible_score < self.fake_threshold and current_score < self.real_threshold:
+            if not self.high_trust_tools.intersection(valid_tools.keys()):
+                return StopDecision(
+                    False,
+                    StopReason.CONTINUE_SECURITY_REQUIRED,
+                    current_score,
+                    evidence_metrics=evidence_metrics
+                )
+            return StopDecision(
+                True,
+                StopReason.HALT_LOCKED_REAL,
+                1.0 - current_score,
+                evidence_metrics=evidence_metrics
+            )
 
         # 8. Locked FAKE Check
         if min_possible_score > self.real_threshold and current_score > self.fake_threshold:

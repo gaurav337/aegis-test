@@ -84,6 +84,7 @@ class ForensicAgent:
         """
         Main analysis loop — orchestrates CPU → GPU Gate → GPU Phase → Ensemble → LLM.
         """
+        self.ensemble = EnsembleAggregator()
         input_data = {
             "media_path": media_path,
             "tracked_faces": preprocess_result.tracked_faces,
@@ -164,13 +165,13 @@ class ForensicAgent:
         # Calculate CPU phase confidence
         cpu_results = [r for name, r in self.ensemble.tool_results.items() if name in cpu_tools_to_run and r.success and not r.error and r.details.get("liveness_label") not in ("ABSTAIN", "ERROR")]
         
-        decisive_results = [r for r in cpu_results if abs(r.score - 0.5) > 0.05]
+        decisive_results = [r for r in cpu_results if abs(r.score - 0.5) > 0.15]
         
         gate_decision = "FULL_GPU"
         unison_agreement = False
         agg_conf = 0.0
         
-        if len(decisive_results) < 2:
+        if len(decisive_results) < 3:
             gate_decision = "FULL_GPU"
         else:
             baseline_weights = {
@@ -201,11 +202,12 @@ class ForensicAgent:
             # Independent domains check
             domains = set()
             for r in decisive_results:
-                if r.tool_name == "run_rppg": domains.add("bio")
+                if r.tool_name == "run_rppg": domains.add("bio_rppg")
                 elif r.tool_name == "run_geometry": domains.add("phys")
                 elif r.tool_name == "run_dct": domains.add("freq")
                 elif r.tool_name == "check_c2pa": domains.add("auth")
-                # illumination & corneal are not counted independently for unison pass against geometry per spec
+                elif r.tool_name == "run_corneal": domains.add("bio_corn")
+                elif r.tool_name == "run_illumination": domains.add("illum")
                 
             if unison and len(domains) >= 2:
                 unison_agreement = True

@@ -40,6 +40,14 @@ class SubprocessToolProxy(BaseForensicTool):
         # Delegate setup to worker during execute for isolation
         pass
 
+    def health_check(self) -> ToolResult:
+        if not os.path.exists(self.python_exec):
+            return ToolResult(self.tool_name, success=False, error=True, error_msg="Python executable not found")
+        # Ensure worker script exists
+        if not os.path.exists(self.worker_script):
+            return ToolResult(self.tool_name, success=False, error=True, error_msg="Worker script not found")
+        return ToolResult(self.tool_name, success=True)
+
     def _run_inference(self, input_data: dict) -> ToolResult:
         start = time.perf_counter()
         
@@ -56,7 +64,7 @@ class SubprocessToolProxy(BaseForensicTool):
             cmd = [self.python_exec, self.worker_script, self.tool_name, in_path]
             
             # Note: We capture stderr for debugging since stdout writes might be polluted by libs
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             
             if result.returncode != 0:
                 logger.error(f"{self.tool_name} subprocess worker failed. Stderr:\n{result.stderr}\nStdout:\n{result.stdout}")
@@ -104,6 +112,19 @@ class SubprocessToolProxy(BaseForensicTool):
                 
             return worker_result
             
+        except subprocess.TimeoutExpired:
+            logger.error(f"{self.tool_name} proxy execution timed out after 120s")
+            return ToolResult(
+                tool_name=self.tool_name,
+                success=False,
+                score=0.0,
+                confidence=0.0,
+                details={},
+                error=True,
+                error_msg="Subprocess timed out after 120s",
+                execution_time=time.perf_counter() - start,
+                evidence_summary="Timeout"
+            )
         except Exception as e:
             logger.error(f"{self.tool_name} proxy execution failed: {e}", exc_info=True)
             return ToolResult(

@@ -244,7 +244,15 @@ class Preprocessor:
         if image is None or image.size == 0:
             return None
             
-        results = self.face_mesh.process(image)
+        try:
+            results = self.face_mesh.process(image)
+        except Exception as e:
+            if "ResourceExhausted" in type(e).__name__:
+                logger.error(f"OOM in landmark detection: {e}")
+                raise
+            logger.error(f"Landmark detection failed: {type(e).__name__}: {e}")
+            return None
+            
         if not results.multi_face_landmarks:
             return None
             
@@ -378,6 +386,21 @@ class Preprocessor:
         return best_idx, max(0.0, best_sharpness)
 
     def process_media(self, path: Path) -> PreprocessResult:
+        # Sanitize and validate
+        path = Path(path).resolve()
+        if not path.is_file():
+            raise ValueError(f"Invalid file path: {path}")
+
+        # Check extension whitelist
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.mp4', '.avi', '.mov', '.webp', '.mkv'}
+        if path.suffix.lower() not in valid_extensions:
+            raise ValueError(f"Unsupported file type: {path.suffix}")
+
+        # Check file size (max 500MB)
+        max_size = 500 * 1024 * 1024
+        if path.stat().st_size > max_size:
+            raise ValueError("File too large. Maximum size is 500MB")
+
         path_str = str(path)
         result = PreprocessResult(has_face=False)
         self.tracker = SortTracker()

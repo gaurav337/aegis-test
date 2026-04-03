@@ -94,7 +94,12 @@ def generate_verdict(
     
     explanation = ""
     while True:
-        token = q.get()
+        try:
+            token = q.get(timeout=300)
+        except queue.Empty:
+            logger.error("LLM generation timed out")
+            break
+            
         if token is None:
             break
         elif token.startswith("__ERROR__: "):

@@ -163,6 +163,13 @@ class ToolRegistry:
                 if label in GPU_TOOLS:
                     # Proxy isolated GPU tools
                     instance = SubprocessToolProxy(label)
+                    
+                    # Verify worker can initialize
+                    health_check = instance.health_check()
+                    if not health_check.success:
+                        self.failed_tools[label] = "Worker setup failed: " + str(health_check.error_msg)
+                        continue
+                        
                     tool_name = instance.tool_name
                     
                     self.tools[tool_name] = instance
