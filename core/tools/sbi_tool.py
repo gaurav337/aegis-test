@@ -405,23 +405,26 @@ class SBITool(BaseForensicTool):
         # FIX: Semantic Evidence Summary (Corrected Logic)
         if boundary_detected:
             summary = (f"SBI detector: localized blend boundary detected at {best_boundary_region} "
-                       f"(score: {best_score:.2f}, scale: {best_scale}). "
+                       f"(authenticity: {1.0 - best_score:.2f}, scale: {best_scale}). "
                        f"Consistent with face-swap compositing artifact.")
         elif best_boundary_region == "diffuse" and best_score > SBI_FAKE_THRESHOLD:
-            summary = (f"SBI detector: strong synthetic signatures detected globally (score: {best_score:.2f}), "
+            summary = (f"SBI detector: strong synthetic signatures detected globally (authenticity: {1.0 - best_score:.2f}), "
                        f"but lacking localized composite boundaries. Consistent with full-face synthesis.")
         else:
-            summary = (f"SBI detector: no blend boundary detected (score: {best_score:.2f}). "
+            summary = (f"SBI detector: no blend boundary detected (authenticity: {1.0 - best_score:.2f}). "
                        f"Authentic / No artifacts.")
 
         # FIX: Confidence based on score magnitude and boundary detection
         confidence = min(1.0, best_score + 0.2) if boundary_detected else max(0.5, 1.0 - abs(best_score - 0.5))
 
         # Clamp visually confusing baseline scores for users when completely authentic
+        # If no boundary detected, and it's not a diffuse fake, return 0.0 to abstain.
+        final_score = best_score if (boundary_detected or (best_boundary_region == "diffuse" and best_score > SBI_FAKE_THRESHOLD)) else 0.0
+
         return ToolResult(
             tool_name=self.tool_name,
             success=True,
-            score=best_score,  # FIX: Use 'score' not 'fake_score'
+            score=final_score,  # FIX: Use clamped final_score
             confidence=confidence,
             details={
                 "boundary_detected": boundary_detected,

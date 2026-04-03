@@ -63,7 +63,7 @@ FREQNET_COMPRESSION_DISCOUNT = 0.50
 # SBI THRESHOLDS
 # =============================================================================
 
-SBI_BLIND_SPOT_THRESHOLD = 0.30
+SBI_BLIND_SPOT_THRESHOLD = 0.50       # Only vote when actual blend boundary detected
 SBI_HIGH_CONFIDENCE_THRESHOLD = 0.80
 SBI_MID_BAND_BASE_WEIGHT = 0.03
 SBI_MID_BAND_CLIP_MULTIPLIER = 0.12
@@ -84,7 +84,7 @@ SBI_THRESHOLD = 0.50
 FREQNET_Z_THRESHOLD = 1.5
 FREQNET_HIGH_BAND_RATIO_THRESHOLD = 0.15
 FREQNET_FAKE_THRESHOLD = 0.50
-FREQNET_BLIND_SPOT_THRESHOLD = 0.30
+FREQNET_BLIND_SPOT_THRESHOLD = 0.45   # Only vote when actual frequency anomaly detected
 FREQNET_CALIBRATION_PATH = "calibration/freqnet_fad_baseline.pt"
 FREQNET_CONFIDENCE_THRESHOLD = 0.6  # FIX: Missing constant
 FREQNET_DCT_COEFFICIENTS = 64       # FIX: Missing constant
@@ -234,6 +234,7 @@ C2PA_CACHE_EXPIRY_SECONDS = 3600
 # =============================================================================
 
 CONFLICT_STD_THRESHOLD = 0.20
+SUSPICION_OVERRIDE_THRESHOLD = 0.50   # Max-pool fires when any specialist above this
 EMA_SMOOTHING_ALPHA = 0.30
 EMA_SMOOTHING_ENABLED = True
 

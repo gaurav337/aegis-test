@@ -181,7 +181,7 @@ class FreqNetTool(BaseForensicTool):
                         fad_score = float(min(1.0, fad_math))
 
                     # --- Stream 2: Neural ---
-                    neural_score = 0.5
+                    neural_score = 0.0  # FIX: Default to 0 (no detection), not 0.5 (neutral vote)
                     if self._weights_loaded_ok:
                         norm_tensor = spatial_prep(tensor)
                         logit = model(norm_tensor)
@@ -204,9 +204,9 @@ class FreqNetTool(BaseForensicTool):
         # Evidence generation
         if worst_face_score > fake_threshold:
             anomaly_info = getattr(best_band_analysis, 'interpretation', 'Spectral trace detected') if best_band_analysis else 'Pattern matched'
-            summary = f"FreqNet detected high-frequency spatial artifacts ({anomaly_info}). Score: {worst_face_score:.2f}."
+            summary = f"FreqNet detected high-frequency spatial artifacts ({anomaly_info}). Authenticity: {1.0 - worst_face_score:.2f}."
         else:
-            summary = f"FreqNet analysis showed normal frequency energy distribution (score: {worst_face_score:.2f})."
+            summary = f"FreqNet analysis showed normal frequency energy distribution (Authenticity: {1.0 - worst_face_score:.2f})."
             
         return ToolResult(
             tool_name=self.tool_name,

@@ -285,10 +285,13 @@ class GeometryTool(BaseForensicTool):
     # ---------------------------------------------------------
     # NEW: Weighted Violation Scoring
     # ---------------------------------------------------------
-    def _weighted_score(self, violations: List[str], severities: Dict[str, float]) -> float:
+    def _weighted_score(self, violations: List[str], severities: Dict[str, float], skip_bilateral: bool = False) -> float:
         """
         Instead of len(violations) / checks_performed, use weighted severity.
         IPD and vertical thirds violations count more than eye asymmetry.
+        
+        FIX: Use dynamic max_weight based on which checks were actually performed.
+        When bilateral checks are skipped, max possible weight is 5.5 not 9.0.
         """
         if not violations:
             return 0.0
@@ -298,7 +301,17 @@ class GeometryTool(BaseForensicTool):
             for v in violations
         )
         
-        return min(self._safe_divide(total_weight, MAX_WEIGHT), 1.0)
+        # Dynamic divisor: only count weights of checks that were actually performed
+        if skip_bilateral:
+            # Only IPD (2.0) + Philtrum (1.5) + Vertical thirds (2.0) = 5.5
+            max_possible = sum(
+                w for name, w in VIOLATION_WEIGHTS.items()
+                if name not in ("Eye width asymmetry", "Nose width ratio", "Mouth width ratio")
+            )
+        else:
+            max_possible = MAX_WEIGHT  # All 6 checks = 9.0
+        
+        return min(self._safe_divide(total_weight, max_possible), 1.0)
 
     # ---------------------------------------------------------
     # MAIN INFERENCE
@@ -415,7 +428,7 @@ class GeometryTool(BaseForensicTool):
             checks_performed = 6 if not skip_bilateral else 3
             
             # Use weighted severity scoring
-            fake_score = self._weighted_score(violations, severities)
+            fake_score = self._weighted_score(violations, severities, skip_bilateral=skip_bilateral)
 
             # --- Calculate Confidence (FIX: Dynamic, not static) ---
             confidence = self._calculate_confidence(checks_performed, yaw_proxy, face_width)

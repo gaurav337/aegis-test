@@ -206,9 +206,9 @@ class XceptionTool(BaseForensicTool):
         confidence = max(0.0, min(1.0, raw_confidence))
 
         if worst_face_score > self.fake_threshold:
-            summary = f"XceptionNet flagged subtle facial blending anomalies (score: {worst_face_score:.2f}). Consistent with face-swap manipulation."
+            summary = f"XceptionNet flagged subtle facial blending anomalies (Authenticity: {1.0 - worst_face_score:.2f}). Consistent with face-swap manipulation."
         else:
-            summary = f"XceptionNet found natural facial blending (score: {worst_face_score:.2f})."
+            summary = f"XceptionNet found natural facial blending (Authenticity: {1.0 - worst_face_score:.2f})."
 
         return ToolResult(
             tool_name=self.tool_name,

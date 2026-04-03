@@ -215,9 +215,9 @@ class UnivFDTool(BaseForensicTool):
         confidence = max(self.conf_min, 0.5 + abs(worst_face_score - 0.5))
 
         if worst_face_score > self.fake_threshold:
-            summary = f"UnivFD detected strong generative AI signatures (score: {worst_face_score:.2f})."
+            summary = f"UnivFD detected strong generative AI signatures (Authenticity: {1.0 - worst_face_score:.2f})."
         else:
-            summary = f"UnivFD found no reliable generative AI signatures (score: {worst_face_score:.2f})."
+            summary = f"UnivFD found no reliable generative AI signatures (Authenticity: {1.0 - worst_face_score:.2f})."
 
         return ToolResult(
             tool_name=self.tool_name,

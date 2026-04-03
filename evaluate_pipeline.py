@@ -76,7 +76,7 @@ def evaluate():
                     final_score = event.data.get("score")
             
             # Label 1 = Fake, Label 0 = Real
-            predicted_label = 1 if final_verdict == "fake" else 0
+            predicted_label = 1 if final_verdict == "FAKE" else 0
             
             results.append({
                 "filename": file_path.name,
@@ -88,7 +88,7 @@ def evaluate():
             })
             
             y_true.append(label)
-            y_scores.append(final_score)  # Lower scale towards 0 is real, 1 is fake
+            y_scores.append(1.0 - final_score)  # final_score is authenticity; ROC AUC expects fake prob = 1
             y_pred.append(predicted_label)
             
         except Exception as e:

@@ -147,7 +147,8 @@ document.addEventListener("DOMContentLoaded", () => {
                         let statusText = "ERROR";
 
                         if (res.success) {
-                            const isRisk = res.score >= 0.55;
+                            const realProb = 1.0 - res.score;
+                            const isRisk = realProb < 0.45;
                             statusClass = isRisk ? "status-invalid" : "status-valid";
                             statusText = isRisk ? "SUSPICIOUS" : "CLEAR";
                         }
@@ -162,11 +163,12 @@ document.addEventListener("DOMContentLoaded", () => {
                             </div>`;
                         
                         if (res.success) {
+                            const realProb = 1.0 - res.score;
                             cardInner += `
                             <div class="tool-metrics">
                                 <div class="metric">
-                                    <span class="metric-label">Score</span>
-                                    <span class="metric-value" style="color: ${res.score > 0.5 ? 'var(--alert)' : 'var(--success)'}">${(res.score || 0).toFixed(2)}</span>
+                                    <span class="metric-label">Authenticity</span>
+                                    <span class="metric-value" style="color: ${realProb < 0.5 ? 'var(--alert)' : 'var(--success)'}">${(realProb * 100).toFixed(0)}%</span>
                                 </div>
                                 <div class="metric">
                                     <span class="metric-label">Confidence</span>

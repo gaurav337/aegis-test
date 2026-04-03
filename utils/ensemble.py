@@ -52,6 +52,7 @@ from utils.thresholds import (
     
     # Conflict detection
     CONFLICT_STD_THRESHOLD,
+    SUSPICION_OVERRIDE_THRESHOLD,
     
     # EMA smoothing (2026 Edge Standard)
     EMA_SMOOTHING_ALPHA,
@@ -343,19 +344,30 @@ def calculate_ensemble_score(
     # A clear authentic in one dimension does NOT cancel a deepfake in another.
     max_prob = max(implied_probs) if implied_probs else 0.0
     
-    if max_prob > 0.50:
-        # Hard max-pooling: if any tool flags suspicion > 0.50, the ensemble perfectly mirrors it.
+    # Debug logging to trace exactly what's happening
+    logger.debug("Ensemble trace: implied_probs=%s, max_prob=%.4f, base_ensemble=%.4f", 
+                 implied_probs, max_prob, base_ensemble)
+    logger.debug("Ensemble trace: tools_ran=%s, abstentions=%s", tools_ran, [a['tool_name'] for a in abstentions])
+    
+    if max_prob > SUSPICION_OVERRIDE_THRESHOLD:
+        # Hard max-pooling: if any tool flags suspicion > threshold, the ensemble mirrors it.
         # This completely prevents dilution of orthogonal deepfake signatures.
-        ensemble_score = round(max_prob, 4)
+        fake_score = round(max_prob, 4)
+        logger.info("Suspicion Overdrive FIRED: max_prob=%.4f > threshold=%.2f, using max-pool", max_prob, SUSPICION_OVERRIDE_THRESHOLD)
     else:
-        ensemble_score = round(max(0.0, min(1.0, base_ensemble)), 4)
+        fake_score = round(max(0.0, min(1.0, base_ensemble)), 4)
+    
+    # Convert to REAL probability: how likely is this media authentic?
+    # 0.0 = definitely fake, 1.0 = definitely real
+    ensemble_score = round(1.0 - fake_score, 4)
         
     conflict_std = _compute_conflict_std(implied_probs)
     has_conflict = conflict_std > CONFLICT_STD_THRESHOLD
     
     output = {
         **_get_base_schema(),
-        "ensemble_score": ensemble_score,
+        "ensemble_score": ensemble_score,  # Real probability (1.0 = authentic)
+        "fake_score": fake_score,          # Preserved for internal reference
         "is_inconclusive": total_weight < ENSEMBLE_INCONCLUSIVE_WEIGHT,
         "total_weight": round(total_weight, 4),
         "tools_ran": tools_ran,
@@ -418,4 +430,6 @@ class EnsembleAggregator:
         
     def get_verdict(self) -> str:
         score = self.get_final_score()
-        return "FAKE" if score >= ENSEMBLE_FAKE_THRESHOLD else "REAL"
+        # ensemble_score is now REAL probability (1.0 = authentic, 0.0 = fake)
+        # FAKE if real probability is below the real threshold
+        return "FAKE" if score <= ENSEMBLE_REAL_THRESHOLD else "REAL"
