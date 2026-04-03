@@ -115,6 +115,12 @@ document.addEventListener("DOMContentLoaded", () => {
             loader.classList.add("hidden");
             resultsZone.classList.remove("hidden");
             
+            // Clear explanation text from any previous run
+            const explanationBox = document.getElementById("explanation-box");
+            const explanationText = document.getElementById("explanation-text");
+            explanationBox.style.display = "none";
+            explanationText.textContent = "";
+            
             const toolsGrid = document.getElementById("tools-grid");
             toolsGrid.innerHTML = '';
             
@@ -186,21 +192,33 @@ document.addEventListener("DOMContentLoaded", () => {
                         card.innerHTML = cardInner;
                         toolsGrid.appendChild(card);
                     }
+                    else if (payload.event_type === 'llm_stream') {
+                        // Stream explanation token-by-token (ChatGPT-style)
+                        const streamBox = document.getElementById("explanation-box");
+                        const streamText = document.getElementById("explanation-text");
+                        if (streamBox.style.display !== "block") {
+                            streamBox.style.display = "block";
+                        }
+                        streamText.textContent += payload.data.token;
+                        // Auto-scroll explanation into view
+                        streamText.scrollTop = streamText.scrollHeight;
+                    }
                     else if (payload.event_type === 'verdict') {
-                        // Show final verdict and LLM explanation
                         const finalDoc = payload.data;
                         const finalVerdictBanner = document.getElementById("final-verdict-banner");
                         const finalVerdictText = document.getElementById("final-verdict");
                         const finalScoreText = document.getElementById("final-score");
-                        const explanationBox = document.getElementById("explanation-box");
-                        const explanationText = document.getElementById("explanation-text");
-                        
+                        // Note: explanationText already fully populated by llm_stream events above
+                        // Only update score and banner here
                         const scorePercent = ((finalDoc.score || 0) * 100).toFixed(1);
                         finalScoreText.textContent = `${scorePercent}%`;
                         
-                        if (finalDoc.explanation) {
-                            explanationBox.style.display = "block";
-                            explanationText.textContent = finalDoc.explanation;
+                        // If somehow llm_stream wasn't used (C2PA short-circuit path), show explanation now
+                        const expBox = document.getElementById("explanation-box");
+                        const expText = document.getElementById("explanation-text");
+                        if (finalDoc.explanation && expText.textContent.trim() === "") {
+                            expBox.style.display = "block";
+                            expText.textContent = finalDoc.explanation;
                         }
                         
                         finalVerdictBanner.classList.remove("fake", "real");
@@ -264,11 +282,30 @@ document.addEventListener("DOMContentLoaded", () => {
         uploadZone.style.borderStyle = "dashed";
         uploadZone.style.padding = "3rem 2rem";
         
+        // Reset tool cards
+        const toolsGrid = document.getElementById("tools-grid");
+        if (toolsGrid) toolsGrid.innerHTML = "";
+
+        // Reset explanation
+        const expBox = document.getElementById("explanation-box");
+        const expText = document.getElementById("explanation-text");
+        if (expBox) expBox.style.display = "none";
+        if (expText) expText.textContent = "";
+
+        // Reset verdict banner
+        const banner = document.getElementById("final-verdict-banner");
+        const bannerText = document.getElementById("final-verdict");
+        const scoreText = document.getElementById("final-score");
+        if (banner) banner.classList.remove("fake", "real");
+        if (bannerText) bannerText.textContent = "";
+        if (scoreText) scoreText.textContent = "";
+
         // Reset active steps
         const steps = document.querySelectorAll('.step');
         steps.forEach(s => s.classList.remove('active'));
         steps[0].classList.add('active');
     }
+
 
     restartBtn.addEventListener('click', resetUI);
 });

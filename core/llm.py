@@ -62,24 +62,32 @@ def generate_verdict(
     q = queue.Queue()
     
     def async_runner():
-        async def run():
-            client = OllamaClient(agent_config)
-            async with client:
-                # Synchronous callback inside async execution thread is supported by OllamaClient
-                def stream_callback(token: str):
-                    q.put(token)
-                
-                try:
-                    await client.generate(
-                        prompt=prompt,
-                        stream_callback=stream_callback,
-                        use_streaming=True
-                    )
-                except Exception as e:
-                    q.put(f"__ERROR__: {str(e)}")
-            q.put(None)
-            
-        asyncio.run(run())
+        # Create a FRESH event loop in this thread.
+        # asyncio.run() raises "This event loop is already running" when called
+        # from inside FastAPI's async event loop. Using a new loop in a
+        # dedicated thread is the correct bridge pattern.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            async def run():
+                client = OllamaClient(agent_config)
+                async with client:
+                    def stream_callback(token: str):
+                        q.put(token)
+
+                    try:
+                        await client.generate(
+                            prompt=prompt,
+                            stream_callback=stream_callback,
+                            use_streaming=True
+                        )
+                    except Exception as e:
+                        q.put(f"__ERROR__: {str(e)}")
+                q.put(None)
+
+            loop.run_until_complete(run())
+        finally:
+            loop.close()
         
     t = threading.Thread(target=async_runner)
     t.start()

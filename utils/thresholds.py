@@ -224,7 +224,7 @@ PREPROCESSING_QUALITY_SNIPE_SAMPLES = 5
 # =============================================================================
 
 C2PA_SHORT_CIRCUIT_ENABLED = True
-C2PA_VISUAL_CONTRADICTION_THRESHOLD = 0.80
+C2PA_VISUAL_CONTRADICTION_THRESHOLD = 0.92   # Raised from 0.80 — must be near-certain FAKE to override a cryptographic signature
 C2PA_VISUAL_MIN_WEIGHT = 0.40
 C2PA_VERIFICATION_STRICT = True
 C2PA_CACHE_EXPIRY_SECONDS = 3600

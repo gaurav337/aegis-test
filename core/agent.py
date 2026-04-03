@@ -130,16 +130,26 @@ class ForensicAgent:
             yield AgentEvent("TOOL_STARTED", tool_name)
             result = self._safe_execute_tool(tool_name, input_data, timeout=30)
             self.ensemble.add_result(result)
-            yield AgentEvent("TOOL_COMPLETED", tool_name, data={"success": result.success, "confidence": result.confidence})
+            yield AgentEvent("tool_complete", tool_name, data={
+                "success": result.success,
+                "score": result.fake_score,
+                "confidence": result.confidence,
+                "evidence_summary": result.evidence_summary,
+                "error_msg": result.error_msg,
+            })
             
             if tool_name == "check_c2pa" and result.success and result.details.get("c2pa_verified", False):
                 yield AgentEvent("EARLY_STOP", data={"reason": "C2PA_VERIFIED"})
-                # Short circuit!
-                return {
+                # MUST yield verdict BEFORE return — generator return value is discarded by for loops
+                yield AgentEvent("verdict", data={
                     "verdict": "REAL",
-                    "score": 1.0,  # 1.0 = Authentic in current terminology
-                    "explanation": "Cryptographically signed via C2PA provenance."
-                }
+                    "score": 1.0,
+                    "explanation": "Cryptographically signed via C2PA Content Credentials (signed by: {}).".format(
+                        result.details.get("signer", "Unknown")
+                    ),
+                    "degraded": False
+                })
+                return
 
         # ── SEGMENT B: CPU->GPU GATE ──
         # Calculate CPU phase confidence
@@ -240,20 +250,26 @@ class ForensicAgent:
                     if hasattr(torch.cuda, "empty_cache"):
                         torch.cuda.empty_cache()
                         
-                    yield AgentEvent("TOOL_COMPLETED", tool_name, data={"success": result.success, "confidence": result.confidence})
+                    yield AgentEvent("tool_complete", tool_name, data={
+                        "success": result.success,
+                        "score": result.fake_score,
+                        "confidence": result.confidence,
+                        "evidence_summary": result.evidence_summary,
+                        "error_msg": result.error_msg,
+                    })
                 except FuturesTimeoutError:
                     logger.error(f"Timeout executing {tool_name} after 60s")
                     self.ensemble.add_result(self._make_error_result(tool_name, "Timeout after 60s", start_time))
                     if hasattr(torch.cuda, "empty_cache"):
                         torch.cuda.empty_cache()
-                    yield AgentEvent("TOOL_COMPLETED", tool_name, data={"success": False, "error": True})
+                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "score": 0.5, "confidence": 0.0, "evidence_summary": "Tool timed out.", "error_msg": "Timeout after 60s"})
                 except Exception as e:
                     logger.error(f"VRAM/Inference Error executing {tool_name}: {e}\n{traceback.format_exc()}")
                     # Fallback counts as ABSTAIN/ERROR
                     self.ensemble.add_result(self._make_error_result(tool_name, str(e), start_time))
                     if hasattr(torch.cuda, "empty_cache"):
                         torch.cuda.empty_cache()
-                    yield AgentEvent("TOOL_COMPLETED", tool_name, data={"success": False, "error": True})
+                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "score": 0.5, "confidence": 0.0, "evidence_summary": "Tool failed.", "error_msg": str(e)})
 
         # Check DEGRADED status if >50% of mapped tools errored out
         is_degraded = False
@@ -273,9 +289,9 @@ class ForensicAgent:
             verdict=verdict_str,
         )
         
-        yield AgentEvent("VERDICT", data={
-            "verdict": verdict_str, 
-            "score": final_score, 
+        yield AgentEvent("verdict", data={
+            "verdict": verdict_str,
+            "score": final_score,
             "explanation": explanation,
             "degraded": is_degraded
         })
