@@ -1,7 +1,7 @@
 # 🛡️ Aegis-X Interview Questions Guide
 
 ## Advanced Deepfake Forensic Detection Pipeline - Comprehensive Interview Preparation
-### **Version 4.0: Three-Pronged Anomaly Shield — Decider/Supporter Hierarchy · GPU Conflict Guard · No-Face Pipeline**
+### **Version 5.0: C2PA V2 + Illumination V5 + Three-Pronged Anomaly Shield — Decider/Supporter Hierarchy · GPU Conflict Guard · No-Face Pipeline**
 
 ---
 
@@ -276,7 +276,7 @@ RPPG_HAIR_OCCLUSION_VARIANCE = 0.25  # ⚠️ BUG: Should be ~35.0 — currently
 **Skip logic:**
 ```python
 # Skip SBI if UnivFD already detected fully synthetic content
-if univfd_score > SBI_SKIP_UNIVFD_THRESHOLD:
+if univfd_score > SBI_SKIP_CLIP_THRESHOLD:
     logger.debug("Skipping SBI (UnivFD score = fully synthetic)")
     continue
 ```
@@ -485,15 +485,7 @@ if tool_name == "check_c2pa" and result.details.get("c2pa_verified"):
     return True  # Skip all other tools
 ```
 
-**But with visual check:**
-```python
-# If C2PA says real but visual models scream fake → possible spoofing
-if visual_avg > C2PA_VISUAL_CONTRADICTION_THRESHOLD:
-    logger.warning("C2PA verified but visual models scream FAKE")
-    # Continue analysis instead of short-circuit
-```
-
-**Why this matters:** C2PA metadata can be stripped or spoofed; visual analysis provides defense-in-depth
+C2PA verified content short-circuits the pipeline immediately. When C2PA declares AI generation (valid signature + digitalSourceType), the pipeline returns FAKE. When C2PA confirms authentic capture, it returns REAL.
 
 ---
 
@@ -589,7 +581,7 @@ elif verdict == "FAKE" and confidence > EARLY_STOP_CONFIDENCE:
 
 ## 6. VRAM Management & GPU Optimization
 
-### Q21: How do you achieve "VRAM-safe on 4GB GPUs"? What's your memory management strategy?
+### Q21: How do you achieve "VRAM-safe on 3GB GPUs (0.8 GB peak)"? What's your memory management strategy?
 
 **What the interviewer is testing:** Resource-constrained optimization, production deployment thinking.
 
@@ -616,10 +608,10 @@ def run_with_vram_cleanup():
 
 **3. Model size awareness:**
 ```
-UnivFD (CLIP-ViT-L): ~1.8 GB peak
-Xception:            ~0.9 GB
-SBI (EfficientNet):  ~0.7 GB
-FreqNet (ResNet50):  ~1.2 GB
+UnivFD (CLIP-ViT-L): ~0.6 GB peak
+Xception:            ~0.5 GB
+SBI (EfficientNet):  ~0.8 GB
+FreqNet (ResNet50):  ~0.4 GB
 ```
 
 **4. Expandable segments:**
@@ -628,7 +620,7 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 Allows PyTorch to fragment/reuse VRAM more efficiently
 
-**Result:** Peak VRAM never exceeds ~1.8 GB even though total model weights = 4.6 GB
+**Result:** Peak VRAM never exceeds ~0.8 GB (SBI) — sequential loading, never additive
 
 ---
 
@@ -1931,20 +1923,20 @@ Ensemble (all) | 94.8%    | 0.97  ← +5.6% accuracy gain
 ## Quick Reference: Key Numbers to Memorize
 
 ```
-Tool Weights (v4.0 — Decider/Supporter Hierarchy):
-  GPU Deciders (control verdict):
-  - UnivFD:    0.22 (Tier 3)
-  - SBI:       0.25 (Tier 3)
-  - Xception:  0.15 (Tier 2)
+Tool Weights (v5.0 — registry.py, runtime source of truth):
+  GPU Deciders:
+  - UnivFD:    0.18 (Tier 3)
+  - SBI:       0.18 (Tier 3)
+  - Xception:  0.13 (Tier 2)
   - FreqNet:   0.10 (Tier 1)
 
-  CPU Supporters (inform only):
-  - Geometry:  0.08 (Tier 1)
-  - rPPG:      0.06 (Tier 2)
-  - C2PA:      0.05 (Gate)
-  - DCT:       0.04 (Tier 1)
+  CPU Supporters:
+  - Geometry:  0.16 (Tier 3)
+  - rPPG:      0.05 (Tier 2)
+  - C2PA:      0.04 (Gate, Tier 1)
+  - DCT:       0.06 (Tier 2)
   - Illumin.:  0.04 (Tier 1)
-  - Corneal:   0.04 (Tier 1)
+  - Corneal:   0.06 (Tier 2)
 
 Thresholds:
 - ENSEMBLE_REAL_THRESHOLD:   0.50 (below = lean REAL)
@@ -1956,8 +1948,8 @@ Thresholds:
 
 Performance:
 - Single image: 4-10 seconds
-- Peak VRAM:   1.8 GB
-- Supported:   4GB+ GPUs
+- Peak VRAM:   0.8 GB
+- Supported:   3GB+ GPUs
 ```
 
 ---
@@ -2024,19 +2016,19 @@ uncertainty = 2 / (total_evidence + 2)
 
 | # | Tool | Category | Trust Tier | Weight | Role | VRAM | Key Signal |
 |---|------|----------|------------|--------|------|------|------------|
-| 1 | **C2PA** | Provenance | 2 (Med) | 0.05 | Gate | 0 MB | Cryptographic signature from camera hardware |
-| 2 | **rPPG** | Biological | 2 (Med) | 0.06 | Supporter | 0 MB | Photoplethysmography—heartbeat from color changes |
-| 3 | **DCT** | Frequency | 1 (Low) | 0.04 | Supporter | 0 MB | Double-quantization artifacts in frequency domain |
-| 4 | **Geometry** | Geometric | 1 (Low) | 0.08 | Supporter | 0 MB | Anthropometric ratios (IPD, philtrum, vertical thirds) |
+| 1 | **C2PA** | Provenance | 1 (Low) | 0.04 | Gate | 0 MB | Cryptographic signature from camera hardware |
+| 2 | **rPPG** | Biological | 2 (Med) | 0.05 | Supporter | 0 MB | Photoplethysmography—heartbeat from color changes |
+| 3 | **DCT** | Frequency | 2 (Med) | 0.06 | Supporter | 0 MB | Double-quantization artifacts in frequency domain |
+| 4 | **Geometry** | Geometric | 3 (High) | 0.16 | Supporter | 0 MB | Anthropometric ratios (IPD, philtrum, vertical thirds) |
 | 5 | **Illumination** | Physical | 1 (Low) | 0.04 | Supporter | 0 MB | Lighting direction consistency across face |
-| 6 | **Corneal** | Biological | 1 (Low) | 0.04 | Supporter | 0 MB | Eye reflection symmetry and divergence |
-| 7 | **UnivFD** | Semantic | 3 (High) | 0.22 | Decider | ~800 MB | CLIP-based detection of generative AI fingerprints |
-| 8 | **Xception** | Semantic | 2 (Med) | 0.15 | Decider | ~600 MB | Face-swap blending artifacts (FaceForensics++) |
-| 9 | **SBI** | Generative | 3 (High) | 0.25 | Decider | ~1.2 GB | Blend boundary detection with GradCAM localization |
-| 10| **FreqNet** | Frequency | 1 (Low) | 0.10 | Decider | ~500 MB | Spectral anomalies in high-frequency bands |
+| 6 | **Corneal** | Biological | 2 (Med) | 0.06 | Supporter | 0 MB | Eye reflection symmetry and divergence |
+| 7 | **UnivFD** | Semantic | 3 (High) | 0.18 | Decider | ~600 MB | CLIP-based detection of generative AI fingerprints |
+| 8 | **Xception** | Semantic | 2 (Med) | 0.13 | Decider | ~500 MB | Face-swap blending artifacts (FaceForensics++) |
+| 9 | **SBI** | Generative | 3 (High) | 0.18 | Decider | ~800 MB | Blend boundary detection with GradCAM localization |
+| 10| **FreqNet** | Frequency | 1 (Low) | 0.10 | Decider | ~400 MB | Spectral anomalies in high-frequency bands |
 
-**Total Weight**: 1.03 (normalized at runtime)
-**Peak VRAM**: 1.8 GB (sequential loading)
+**Total Weight**: 1.00 (registry.py)
+**Peak VRAM**: 0.8 GB (sequential loading)
 **No-Face Fallback**: FreqNet/UnivFD/Xception fall back to raw image analysis when no faces detected
 **CPU Tools**: 6 (60% of arsenal, 0% VRAM)
 **GPU Tools**: 4 (40% of arsenal, require VRAM management)
@@ -2051,7 +2043,7 @@ uncertainty = 2 / (total_evidence + 2)
 
 ### "How do you prevent a single faulty tool from corrupting the verdict?"
 
-**Answer**: *"Three layers of protection: (1) Weight capping—no single tool exceeds 0.20 weight (20%), (2) Abstention logic—tools return confidence=0 if input quality is poor (e.g., rPPG on images, corneal on low-res), and (3) Robust aggregation—we use weighted median for conflict cases instead of mean to reduce outlier impact."*
+**Answer**: *"Three layers of protection: (1) Weight capping—no single tool exceeds 0.18 weight (registry.py). Weighted average used for aggregation (not median). (2) Abstention logic—tools return confidence=0 if input quality is poor (e.g., rPPG on images, corneal on low-res), and (3) Robust aggregation—we use weighted average for all cases to reduce outlier impact."*
 
 ### "Why not just train an end-to-end transformer on all these signals?"
 
@@ -2059,7 +2051,7 @@ uncertainty = 2 / (total_evidence + 2)
 
 ### "How would you handle a 4K video with 10 faces?"
 
-**Answer**: *"Current implementation processes faces sequentially with subject-aware state tracking. For 4K video: (1) Frame sampling reduces 30fps to keyframes based on quality metrics, (2) Face patches are resized to model-specific resolutions (224px for Xception, 380px for SBI), (3) VRAM remains constant at 1.8GB regardless of resolution because we never batch multiple faces simultaneously. Trade-off: latency increases linearly with face count (~3 sec per additional face)."*
+**Answer**: *"Current implementation processes faces sequentially with subject-aware state tracking. For 4K video: (1) Frame sampling reduces 30fps to keyframes based on quality metrics, (2) Face patches are resized to model-specific resolutions (224px for Xception, 380px for SBI), (3) VRAM remains constant at 0.8GB regardless of resolution because we never batch multiple faces simultaneously. Trade-off: latency increases linearly with face count (~3 sec per additional face)."*
 
 ### "What's your plan for detecting audio deepfakes?"
 
@@ -2169,18 +2161,18 @@ Time (ms)    VRAM (MB)   Active Component
 0            0           Start
 500          0           Preprocessing
 1300         0           CPU Tools
-1500         800         UnivFD loaded
+1500         600         UnivFD loaded
 2000         0           UnivFD unloaded
-2200         600         Xception loaded
+2200         500         Xception loaded
 2700         0           Xception unloaded
-2900         1200        SBI loaded
+2900         800         SBI loaded
 3600         0           SBI unloaded
-3800         500         FreqNet loaded
+3800         400         FreqNet loaded
 4300         0           FreqNet unloaded
 4350         0           Ensemble + LLM (CPU)
 ```
 
-**Peak VRAM**: 1200 MB (SBI)
+**Peak VRAM**: 800 MB (SBI)
 **Average VRAM**: 625 MB
 **VRAM-Hours**: 0.0007 kWh (extremely efficient)
 
@@ -2264,8 +2256,8 @@ Time (ms)    VRAM (MB)   Active Component
 **End of Document**
 
 *Last Updated: April 2026*
-*Document Version: 3.0 (Dual-Pipeline Final Edition)*
-*Total Questions: 58 core + 30 appendix deep-dives + 5 v3.0 architecture sections + v4.0 anomaly shield updates = 93+ total*
+*Document Version: 5.0 (Dual-Pipeline Final Edition)*
+*Total Questions: 66 core + appendix deep-dives = 93+ total*
 
 ---
 
@@ -2577,15 +2569,15 @@ sliced_trajectory = {
 
 | Label | Score | Confidence | Cause | Ensemble Behavior |
 |---|---|---|---|---|
-| `PULSE_PRESENT` | 0.0 | 0.70–0.95 | ≥2 ROIs coherent at cardiac freq | Pushes REAL |
+| `PULSE_PRESENT` | 0.0 | 0.0 | ≥2 ROIs coherent at cardiac freq | Zero-weight (excluded) |
 | `ABSTAIN` | 0.0 | 0.0 | Image / face_window failed / hair | Zero-weight (excluded) |
 | `SKIPPED` | 0.0 | 0.0 | Static image | Zero-weight (excluded) |
-| `NO_PULSE` | 1.0 | 0.90 | All regions flat OR no cardiac peak | Pushes FAKE |
-| `SYNTHETIC_FLATLINE` | 1.0 | 0.85 | <2 ROIs with variance | Pushes FAKE |
-| `WEAK_PULSE_FAILED` | 1.0 | 0.70 | Only 1 ROI passes | Pushes FAKE |
-| `INCOHERENT` | 1.0 | 0.65–0.90 | ROI peaks desynchronized | Pushes FAKE |
+| `NO_PULSE` | 0.0 | 0.0 | All regions flat OR no cardiac peak | Zero-weight (excluded) |
+| `SYNTHETIC_FLATLINE` | 0.0 | 0.0 | <2 ROIs with variance | Zero-weight (excluded) |
+| `WEAK_PULSE_FAILED` | 0.0 | 0.0 | Only 1 ROI passes | Zero-weight (excluded) |
+| `INCOHERENT` | 0.0 | 0.0 | ROI peaks desynchronized | Zero-weight (excluded) |
 | `AMBIGUOUS` | 0.0 | 0.0 | Hair occlusion on forehead | Zero-weight (excluded) |
-| `TRACKING_FAILED` | 1.0 | 0.85 | All ROI signals None (non-hair) | Pushes FAKE |
+| `TRACKING_FAILED` | 0.0 | 0.0 | All ROI signals None (non-hair) | Zero-weight (excluded) |
 
 **Key insight:** Abstention labels all use `confidence=0.0`, which means they're filtered out by the gate math (contribution = `0 × weight = 0`) and don't push the ensemble toward either direction.
 
@@ -2758,8 +2750,8 @@ core/tools/rppg_tool.py
 **End of Document**
 
 *Last Updated: April 2026*
-*Document Version: 3.0 — Dual-Pipeline Final Edition*
-*Total Questions: 66 (58 core + 8 v3.0 architecture deep-dives)*
+*Document Version: 5.0 — Dual-Pipeline Final Edition*
+*Total Questions: 66 core + appendix deep-dives*
 
 ---
 

@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/CUDA-RTX_3050+-76B900?style=for-the-badge&logo=nvidia&logoColor=white" />
   <img src="https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white" />
   <img src="https://img.shields.io/badge/Ollama-Phi3:Mini-FF6F00?style=for-the-badge&logo=meta&logoColor=white" />
-  <img src="https://img.shields.io/badge/Version-4.0_(Anomaly--Shield)-8B5CF6?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Version-5.0_(Illumination_Shield)-8B5CF6?style=for-the-badge" />
 </p>
 
 <h1 align="center">🛡️ Aegis-X</h1>
@@ -32,9 +32,9 @@
 - **10-Tool Forensic Arsenal** — 6 CPU-bound classical/physics/signal tools + 4 GPU-accelerated neural networks, each targeting an independent manipulation vector
 - **Dual-Pipeline with Face Gate** — Media is intelligently routed: a 4-dimension Face Gate decides whether the full bio-signal CPU path runs before GPU inference. **No-face media** skips bio-signal tools and runs the frequency/spectral GPU pipeline directly
 - **CPU→GPU Early Stopping Gate** — After the CPU phase, a directional confidence gate (`HALT` / `MINIMAL_GPU` / `FULL_GPU`) prevents unnecessary GPU execution when the CPU already has consensus
-- **Three-Pronged Anomaly Shield (v4.0)** — Prevents clean-signal dilution: Suspicion Overdrive (hard GPU max-pool with conflict guard), Borderline Consensus Detection (corroborated weak signals), and GPU Coverage Degradation (penalty when specialists abstain)
-- **C2PA AI-Generation Detection** — Recursively scans all embedded C2PA manifests (including historical ingredients) for AI-generation indicators (IPTC `trainedAlgorithmicMedia`, software agent strings like Gemini/Midjourney). Issues immediate FAKE verdict for AI-generated content, REAL for authentic hardware capture
-- **GPU Specialist Hierarchy** — GPU neural networks (UnivFD, Xception, SBI, FreqNet) are the "deciders" with weights 0.10–0.25. CPU tools (DCT, Geometry, Corneal, Illumination) are "supporters" with weights 0.04–0.08 — they inform but never override GPU consensus
+- **Three-Pronged Anomaly Shield (v5.0)** — Prevents clean-signal dilution: Suspicion Overdrive (hard GPU max-pool with conflict guard), Borderline Consensus Detection (corroborated weak signals), and GPU Coverage Degradation (penalty when specialists abstain)
+- **C2PA AI-Generation Detection (V2)** — Recursively scans all embedded C2PA manifests for AI-generation indicators (IPTC `digitalSourceType`: `trainedAlgorithmicMedia`, `algorithmicMedia`, `compositeSynthetic`). Cryptographic signature validation depth checking (valid/invalid/untrusted/expired). Full provenance chain extraction (creation tool → final tool). When a valid C2PA signature declares AI generation, score = 1.0 (fake) with 0.95 confidence — the strongest possible evidence of synthetic content. Manipulation severity scoring from action history (c2pa.edited, c2pa.retouched, c2pa.composited). Case-insensitive pattern-based keyword matching for AI tool detection (Flux, Ideogram, Leonardo, Kling, Runway, Pika, Sora). Absence of C2PA correctly abstains (score 0.0, confidence 0.0) — no influence on ensemble.
+- **GPU Specialist Hierarchy** — GPU neural networks (UnivFD, Xception, SBI, FreqNet) are the "deciders" with weights 0.10–0.18 (registry.py). CPU tools (DCT, Geometry, Corneal, Illumination) are "supporters" with weights 0.04–0.16 (registry.py) — they inform but never override GPU consensus
 - **Abstention Transparency** — Tools with `confidence = 0` display `[ABSTAINED] N/A` in the UI and LLM prompt, preventing the "100% Authentic" hallucination trap
 - **30s CPU / 60s GPU Per-Tool Timeouts** — `ThreadPoolExecutor`-enforced timeouts on every tool; hung tools never block the pipeline
 - **DEGRADED Mode Propagation** — If >50% of tools error out, the verdict dict and SSE events include `"degraded": true` for consumers
@@ -233,8 +233,10 @@ pass_face_gate?
     yield AgentEvent("TOOL_COMPLETED")
 
   Special case: C2PA verified?
-    → yield AgentEvent("EARLY_STOP")
-    → return {"verdict": "REAL", "score": 1.0, "explanation": ...}
+    → If AI-generated: yield AgentEvent("EARLY_STOP")
+      return {"verdict": "FAKE", "score": 0.0, "explanation": ...}
+    → If authentic: yield AgentEvent("EARLY_STOP")
+      return {"verdict": "REAL", "score": 1.0, "explanation": ...}
 ```
 
 ### Stage 3 — CPU→GPU Gate (Segment B)
@@ -351,10 +353,10 @@ gate_decision ≠ HALT?
 
 | Tool | File | Weight | Role | Target Threat | Method |
 |---|---|---|---|---|---|
-| `check_c2pa` | `c2pa_tool.py` | 0.05 | Gate | Provenance forgery / AI generation | Recursive C2PA manifest scan (IPTC tags + software agents) |
+| `check_c2pa` | `c2pa_tool.py` | 0.05 | Gate | Provenance forgery / AI generation | V2: IPTC digitalSourceType + action history severity + cryptographic signature validation + full provenance chain + regex pattern AI keywords |
 | `run_dct` | `dct_tool.py` | 0.04 | Supporter | JPEG re-encoding | Double-quantization frequency peaks |
 | `run_geometry` | `geometry_tool.py` | 0.08 | Supporter | Anthropometric distortion | IPD, philtrum, vertical thirds (MediaPipe 468-pt) |
-| `run_illumination` | `illumination_tool.py` | 0.04 | Supporter | Lighting inconsistency | Gradient-based directional light analysis |
+| `run_illumination` | `illumination_tool.py` | 0.04 | Supporter | Lighting inconsistency | 2D gradient angular comparison (Sobel), bilateral-filtered skin-masked face luma, per-strip context gradient averaging, nose shadow validation, BGR/RGB auto-detection |
 | `run_corneal` | `corneal_tool.py` | 0.04 | Supporter | Missing/mismatched catchlights | Bilateral reflection detection + divergence score |
 | `run_rppg` | `rppg_tool.py` | 0.06 | Supporter | Absent biological signal | POS rPPG + FFT (0.7–2.5 Hz cardiac band) ⚠️ |
 
@@ -375,9 +377,30 @@ gate_decision ≠ HALT?
 
 ---
 
-## 🆕 Key Changes v3.0
+## 🆕 Key Changes v5.0
 
-### Bug Fixes Applied Since Last Commit
+### C2PA Tool V2 — 6 Critical Fixes
+
+| # | Issue | Fix | Impact |
+|---|---|---|---|
+| 1 | `is_ai_generated` computed but score always 0.0 | Score = 1.0 (fake) when valid sig + AI declared | Firefly-signed AI images no longer reported as authentic |
+| 2 | Valid signature ≠ authentic content | Action history parsed for manipulation severity (c2pa.edited, retouched, composited) | Clean camera capture vs. 10-action Photoshop chain scored differently |
+| 3 | C2PA absence treated as neutral | Correctly abstains (0.0/0.0) — ensemble weights asymmetrically | Missing C2PA no longer falsely signals authenticity |
+| 4 | Fragile keyword matching | IPTC `digitalSourceType` authoritative + case-insensitive regex patterns (Flux, Ideogram, etc.) | New AI tools detected; "generated thumbnail" false positives eliminated |
+| 5 | No signature validation depth | `validation_status` checked for invalid/untrusted/expired | Tampered files with broken signatures flagged as suspicious |
+| 6 | Only active manifest's signer checked | Full provenance chain extracted (creation tool → final tool) | AI-generated image re-saved in Photoshop now correctly flagged |
+
+### Illumination Tool V5 — 5 Quality Fixes
+
+| # | Issue | Fix | Impact |
+|---|---|---|---|
+| 1 | `_ensure_rgb` heuristic triggered on blue-heavy scenes | Multi-channel variance + mean comparison | Ocean/sky photos no longer misinterpreted as BGR |
+| 2 | Context vstack created artificial Sobel edge | Per-strip gradient computation with vector averaging | No fake discontinuity between left/right background strips |
+| 3 | Scoring used crude left/right ratio | Angular mismatch severity drives penalty (0°–180° scale) | Near-center lighting no longer causes false mismatches |
+| 4 | Context luma not bilateral filtered | Bilateral filter applied to context strips (matching face) | Background texture artifacts no longer corrupt context gradient |
+| 5 | Skin mask fallback returned unmasked luma | Returns `None` when <100 skin pixels detected | Glasses/heavy makeup faces abstain instead of producing noisy signal |
+
+### Bug Fixes Applied Since Last Commit (v3.0)
 
 | # | File | Change | Impact |
 |---|---|---|---|
@@ -526,7 +549,7 @@ calculate_ensemble_score()
       SBI     → blind spot below 0.50; mid-band uses UnivFD context
       FreqNet → blind spot below 0.45; compression discount
       UnivFD/Xception → direct score × weight
-      CPU tools → low weight (0.04–0.08), supporters only
+      CPU tools → low weight (0.04–0.16 registry.py), supporters only
   Step 4: Three-Pronged Anomaly Scoring
     PRONG 1 — Suspicion Overdrive:
       max_gpu_prob = max(GPU specialist implied probs)
@@ -698,10 +721,10 @@ aegis-x/
 │   ├── exceptions.py           # Custom exception hierarchy
 │   └── tools/
 │       ├── registry.py         # Tool manifest, weights, trust tiers, dispatch
-│       ├── c2pa_tool.py        # [CPU] C2PA cryptographic provenance check
+│       ├── c2pa_tool.py        # [CPU] C2PA V2: AI provenance + signature validation + chain
 │       ├── dct_tool.py         # [CPU] JPEG double-quantization detection
 │       ├── geometry_tool.py    # [CPU] 468-landmark anthropometric ratio analysis
-│       ├── illumination_tool.py# [CPU] Directional lighting gradient analysis
+│       ├── illumination_tool.py# [CPU] 2D angular gradient lighting analysis (V5)
 │       ├── corneal_tool.py     # [CPU] Catchlight reflection divergence scoring
 │       ├── rppg_tool.py        # [CPU] POS rPPG + FFT cardiac liveness (video)
 │       ├── univfd_tool.py      # [GPU] CLIP-ViT-L/14 + linear probe (CVPR 2023)
@@ -848,69 +871,21 @@ CLIP-ViT-L/14 (~890 MB) auto-downloads from HuggingFace on first run.
 
 ### Weight Mismatches (registry.py vs. thresholds.py)
 
-The ensemble scorer uses `thresholds.py` weights; the `EarlyStoppingController` uses `registry.py` weights. These differ:
+**registry.py is the runtime source of truth** — these are the actual weights used by the tool registry and EarlyStoppingController. The `thresholds.py` weights are used by the ensemble scorer. These differ:
 
-| Tool | `registry.py` | `thresholds.py` |
+| Tool | `registry.py` (runtime) | `thresholds.py` (ensemble) |
 |---|---|---|
-| `run_dct` | 0.07 | 0.04 |
-| `run_geometry` | 0.18 | 0.08 |
-| `run_illumination` | 0.05 | 0.04 |
-| `run_corneal` | 0.07 | 0.04 |
-| `run_univfd` | 0.20 | 0.22 |
-| `run_sbi` | 0.20 | 0.25 |
-| `run_freqnet` | 0.09 | 0.10 |
-
-### Security Notes
-
-- No authentication or rate limiting on `/api/analyze`
-- No filename sanitization (path traversal risk)
-- No file cleanup after analysis (disk exhaustion risk)
-- No upload collision handling (same filename overwrites)
-
----
-
-## ⚠️ Known Issues & Discrepancies (Verified April 2026)
-
-> These are documented, verified discrepancies between code, configuration, and documentation. They are tracked here for transparency.
-
-### Critical Bugs
-
-| # | File | Issue | Impact | Status |
-|---|---|---|---|---|
-| 1 | `core/llm.py:100` | `logger` is never imported — `NameError` on LLM timeout (queue.Empty after 300s) | Pipeline crashes if LLM times out | **Needs fix** |
-| 2 | `utils/thresholds.py:121` | `RPPG_HAIR_OCCLUSION_VARIANCE = 0.25` but README/code comments say 35.0 — Laplacian variance is typically 30-200+ | Nearly every frame triggers false hair occlusion → rPPG abstains unnecessarily | **Needs fix** |
-| 3 | `utils/thresholds.py:120` | `RPPG_CARDIAC_BAND_MAX_HZ = 2.5` (150 BPM) but README documents 4.0 (240 BPM) | Cardiac peaks above 150 BPM are missed | **Needs fix** |
-| 4 | `run_web.py:30` | `file.filename` used directly without sanitization — path traversal possible | Security vulnerability: `../../etc/passwd` could write outside upload dir | **Needs fix** |
-
-### Configuration Inconsistencies
-
-| Setting | `config.py` default | `thresholds.py` value | Notes |
-|---|---|---|---|
-| `AGENT_MAX_RETRIES` | 2 | 3 | Two separate default sources |
-| `LLM_MAX_TOKENS` | 1024 | 512 | Two separate default sources |
-
-### Documentation vs. Code Discrepancies
-
-| Item | README says | Code actually uses | File:Line |
-|---|---|---|---|
-| Decisive threshold | `\|score - 0.5\| > 0.05` | `\|score - 0.5\| > 0.15` | `agent.py:168` |
-| Gate decisive count | `< 2` → FULL_GPU | `< 3` → FULL_GPU | `agent.py:174` |
-| rPPG cardiac band max | 4.0 Hz (240 BPM) | 2.5 Hz (150 BPM) | `thresholds.py:120` |
-| rPPG hair occlusion | 35.0 | 0.25 | `thresholds.py:121` |
-
-### Weight Mismatches (registry.py vs. thresholds.py)
-
-The ensemble scorer uses `thresholds.py` weights; the `EarlyStoppingController` uses `registry.py` weights. These differ:
-
-| Tool | `registry.py` | `thresholds.py` |
-|---|---|---|
-| `run_dct` | 0.07 | 0.04 |
-| `run_geometry` | 0.18 | 0.08 |
-| `run_illumination` | 0.05 | 0.04 |
-| `run_corneal` | 0.07 | 0.04 |
-| `run_univfd` | 0.20 | 0.22 |
-| `run_sbi` | 0.20 | 0.25 |
-| `run_freqnet` | 0.09 | 0.10 |
+| `check_c2pa` | 0.04 | 0.05 |
+| `run_dct` | 0.06 | 0.04 |
+| `run_rppg` | 0.05 | 0.06 |
+| `run_geometry` | 0.16 | 0.08 |
+| `run_illumination` | 0.04 | 0.04 |
+| `run_corneal` | 0.06 | 0.04 |
+| `run_univfd` | 0.18 | 0.22 |
+| `run_xception` | 0.13 | 0.15 |
+| `run_sbi` | 0.18 | 0.25 |
+| `run_freqnet` | 0.10 | 0.10 |
+| **Total** | **1.00** | **1.03** |
 
 ### Security Notes
 
@@ -929,5 +904,5 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 <p align="center">
   Built with 🔬 forensic rigor and ⚡ engineering precision.<br>
-  <em>v3.0 — Dual-Pipeline Architecture with Face Gate, Directional Confidence Gating & Silent Killer Fixes</em>
+  <em>v5.0 — C2PA V2 (AI provenance + signature validation) · Illumination V5 (angular gradient + skin mask + bilateral filter) · Anomaly Shield v5.0</em>
 </p>

@@ -223,10 +223,11 @@ class Preprocessor:
         # FIX 2: Correct config attribute path
         max_faces = getattr(config.preprocessing, 'max_subjects_to_analyze', 2)
         self.face_mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=True,
+            static_image_mode=False,
             refine_landmarks=True,
             max_num_faces=max_faces,
-            min_detection_confidence=0.5
+            min_detection_confidence=0.3,
+            min_tracking_confidence=0.3
         )
         self.tracker = SortTracker()
         
@@ -270,16 +271,9 @@ class Preprocessor:
             for i, lm in enumerate(face_landmarks.landmark):
                 coords[i] = [lm.x * w, lm.y * h]
                 
-            nose = coords[1]
-            jaw_l = coords[234]
-            jaw_r = coords[454]
-            valid = True
-            for node in [nose, jaw_l, jaw_r]:
-                if not (0 <= node[0] < w and 0 <= node[1] < h):
-                    valid = False
-                    break
-            
-            if valid:
+            # Count in-bounds landmarks (require ≥100 to avoid junk detection)
+            in_bounds = sum(1 for node in coords if 0 <= node[0] < w and 0 <= node[1] < h)
+            if in_bounds >= 100:
                 x_min, y_min = np.min(coords, axis=0)
                 x_max, y_max = np.max(coords, axis=0)
                 area = (x_max - x_min) * (y_max - y_min)
