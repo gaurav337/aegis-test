@@ -203,6 +203,7 @@ class PreprocessResult:
     has_face: bool
     tracked_faces: List[TrackedFace] = field(default_factory=list)
     frames_30fps: Optional[List[np.ndarray]] = None 
+    first_frame: Optional[np.ndarray] = None
     selected_frame_index: int = 0
     selected_frame_sharpness: float = 0.0
     original_media_type: str = "image"
@@ -419,6 +420,7 @@ class Preprocessor:
                 if not frames:
                     return result
                 result.frames_30fps = frames
+                result.first_frame = frames[0]
                 
                 # FIX 7: Flag if video too short for rPPG
                 if len(frames) < self.config.preprocessing.min_video_frames:
@@ -461,13 +463,16 @@ class Preprocessor:
                         established_tracks[trk_id].trajectory_bboxes[i] = (int(x1), int(y1), int(x2), int(y2))
                 
                 # --- PHASE 2: EXTRACT CROPS PER-TRACK & HEURISTICS ---
-                gray_first = cv2.cvtColor(frames[0], cv2.COLOR_RGB2GRAY)
+                # Use eagerly-cached first_frame to avoid DiskBackedFrameList lazy-load race
+                gray_first = cv2.cvtColor(result.first_frame, cv2.COLOR_RGB2GRAY)
                 if gray_first.mean() < 50.0:
                     result.heuristic_flags.append("LOW_LIGHT")
                 
                 for trk_id, track_obj in established_tracks.items():
-                    # FIX 4: Less aggressive filtering for short videos
-                    min_track_length = min(15, len(frames) // 2)
+                    # FIX 4: Much more permissive — only discard tracks with < 3–5 detections
+                    # The old threshold (min(15, frames//2)) was silently dropping valid face
+                    # tracks that appear late or leave early in the video.
+                    min_track_length = min(5, max(3, len(frames) // 30))
                     if len(track_obj.trajectory_bboxes) < min_track_length:
                         continue
                         
@@ -494,7 +499,8 @@ class Preprocessor:
 
                     avg_area_ratio = 0.0
                     avg_sharpness = 0.0
-                    frame_w, frame_h = frames[0].shape[1], frames[0].shape[0]
+                    # Use eagerly-cached first_frame to avoid DiskBackedFrameList lazy-load race
+                    frame_w, frame_h = result.first_frame.shape[1], result.first_frame.shape[0]
                     total_area = frame_w * frame_h
                     sampled = 0
                     
@@ -604,6 +610,7 @@ class Preprocessor:
                 result.original_media_type = "image"
                 image = load_image(path)
                 result.frames_30fps = [image]
+                result.first_frame = image
                 
                 final_landmarks_list = self._get_landmarks(image)
                 if final_landmarks_list is None:
@@ -645,4 +652,10 @@ class Preprocessor:
             
         except Exception as e:
             logger.error(f"Preprocessing failed for {path_str}: {e}", exc_info=True)
+            # CRITICAL: Return the partially-populated result (which still has first_frame
+            # and frames_30fps set) so GPU tools have image data even if face tracking crashed.
+            # Only fall back to a blank result if we have no frame data at all.
+            if result.first_frame is not None or result.frames_30fps:
+                logger.warning("Returning partial preprocessing result — face tracking failed but frame data is available.")
+                return result
             return PreprocessResult(has_face=False)

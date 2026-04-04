@@ -89,6 +89,7 @@ class ForensicAgent:
             "media_path": media_path,
             "tracked_faces": preprocess_result.tracked_faces,
             "frames_30fps": preprocess_result.frames_30fps,
+            "first_frame": getattr(preprocess_result, "first_frame", None),
             "original_media_type": getattr(preprocess_result, "original_media_type", "image"),
         }
         

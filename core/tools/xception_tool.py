@@ -146,6 +146,7 @@ class XceptionTool(BaseForensicTool):
         start_time = time.time()
         tracked_faces = input_data.get("tracked_faces", [])
         media_path = input_data.get("media_path", None)
+        first_frame = input_data.get("first_frame", None)
         
         # Build list of numpy crops (RGB, uint8) to analyze
         np_crops = []
@@ -163,7 +164,10 @@ class XceptionTool(BaseForensicTool):
                 np_crops.append(face_crop)
         
         # No-face fallback: load raw image (Xception will resize to 299x299 in _prepare_tensor)
-        if not np_crops and media_path:
+        if not np_crops and first_frame is not None:
+            np_crops.append(first_frame)
+            logger.info("Xception: No faces found, falling back to raw video frame analysis.")
+        elif not np_crops and media_path:
             try:
                 raw_img = Image.open(media_path).convert("RGB")
                 np_crops.append(np.array(raw_img))

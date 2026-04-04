@@ -361,20 +361,11 @@ def calculate_ensemble_score(
     logger.debug("Ensemble trace: tools_ran=%s, abstentions=%s", tools_ran, [a['tool_name'] for a in abstentions])
     
     if max_gpu_prob > SUSPICION_OVERRIDE_THRESHOLD:
-        # Check for internal GPU conflict before hard max-pooling.
-        # If the spread between the most and least suspicious GPU specialist
-        # is large, they contradict each other and we can't trust a single detector.
-        min_gpu_prob = min(gpu_specialist_probs) if gpu_specialist_probs else 0.0
-        gpu_spread = max_gpu_prob - min_gpu_prob
-        if gpu_spread > 0.30 and len(gpu_specialist_probs) >= 2:
-            # GPU specialists contradict each other — fall back to weighted average
-            fake_score = round(max(0.0, min(1.0, base_ensemble)), 4)
-            logger.info("Suspicion Overdrive BLOCKED by GPU conflict: spread=%.4f (%.2f to %.2f). Using base_ensemble=%.4f",
-                       gpu_spread, min_gpu_prob, max_gpu_prob, base_ensemble)
-        else:
-            # Hard max-pooling for unanimous GPU certainty
-            fake_score = round(max_gpu_prob, 4)
-            logger.info("Suspicion Overdrive FIRED: max_gpu_prob=%.4f > threshold=%.2f", max_gpu_prob, SUSPICION_OVERRIDE_THRESHOLD)
+        # Forensic tools detect complementary failure modes (e.g. face-swap vs pure generative).
+        # A high score from ONE reliable GPU specialist is sufficient evidence of manipulation.
+        # Hard max-pooling for highest GPU certainty.
+        fake_score = round(max_gpu_prob, 4)
+        logger.info("Suspicion Overdrive FIRED: max_gpu_prob=%.4f > threshold=%.2f. Complementary tools OR logic active.", max_gpu_prob, SUSPICION_OVERRIDE_THRESHOLD)
     else:
         # ── PRONG 2: Borderline Consensus Detection ──
         # When ≥2 GPU specialists independently cluster near 50% (borderline zone),
@@ -410,19 +401,9 @@ def calculate_ensemble_score(
         # via the base weighted average but cannot unilaterally anchor the score.
         anomaly_anchor = max_gpu_prob
         
-        # Check if GPU specialists have internal conflict — if so, disable anchoring
-        # Conflict = large spread between most and least suspicious GPU specialists
-        min_gpu_prob = min(gpu_specialist_probs) if gpu_specialist_probs else 0.0
-        gpu_spread = max_gpu_prob - min_gpu_prob
-        gpu_has_conflict = gpu_spread > 0.30 and len(gpu_specialist_probs) >= 2
-        if gpu_has_conflict:
-            # GPU specialists contradict each other — just use base average,
-            # and also disable degradation boost (conflict already embeds uncertainty)
-            anomaly_anchor = 0.0
-            consensus_anchor = 0.0
-            gpu_degradation_boost = 1.0
-            logger.info("Anomaly/Consensus anchors DISABLED: GPU spread=%.4f > 0.30 (%.2f to %.2f)",
-                       gpu_spread, min_gpu_prob, max_gpu_prob)
+        # We no longer disable anomaly anchors due to "conflict". GPU specialists detect
+        # orthogonal features (e.g., SBI for boundaries, UnivFD for generative GANs).
+        # One tool firing while others are silent is an expected behavioral pattern.
         
         # Pick the strongest signal from all three sources
         candidate_score = max(base_ensemble, anomaly_anchor, consensus_anchor)

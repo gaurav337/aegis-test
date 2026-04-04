@@ -203,6 +203,7 @@ class DCTTool(BaseForensicTool):
         # ✅ FIX 5: Rely on Preprocessing Contract (Spec Section 1.5)
         tracked_faces = input_data.get("tracked_faces", [])
         frames = input_data.get("frames_30fps", [])
+        first_frame = input_data.get("first_frame", None)
         media_path = input_data.get("media_path", None)
 
         # Build crops list — face crops or raw image fallback
@@ -214,7 +215,11 @@ class DCTTool(BaseForensicTool):
                     crops.append(crop)
         
         # No-face fallback: load raw image
-        if not crops and media_path:
+        if not crops and first_frame is not None:
+            import cv2
+            crop = cv2.resize(first_frame, (224, 224), interpolation=cv2.INTER_LANCZOS4)
+            crops.append(crop)
+        elif not crops and media_path:
             try:
                 from PIL import Image
                 raw_img = Image.open(media_path).convert("RGB").resize((224, 224), Image.LANCZOS)

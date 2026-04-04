@@ -117,6 +117,7 @@ class FreqNetTool(BaseForensicTool):
         
         tracked_faces = input_data.get("tracked_faces", [])
         media_path = input_data.get("media_path", None)
+        first_frame = input_data.get("first_frame", None)
         
         # Build list of numpy crops (224x224, uint8, RGB) to analyze
         np_crops = []
@@ -132,12 +133,16 @@ class FreqNetTool(BaseForensicTool):
                     face_crop = face_crop.astype(np.uint8)
                 np_crops.append(face_crop)
         
-        # No-face fallback: load raw image, resize to 224x224
-        if not np_crops and media_path:
+        # ALWAYS analyze the full image context for spectral anomalies
+        if first_frame is not None:
+            raw_img = cv2.resize(first_frame, (224, 224), interpolation=cv2.INTER_LANCZOS4)
+            np_crops.append(raw_img)
+            logger.info("FreqNet: Attached full video frame context for frequency analysis.")
+        elif media_path:
             try:
                 raw_img = Image.open(media_path).convert("RGB").resize((224, 224), Image.LANCZOS)
                 np_crops.append(np.array(raw_img))
-                logger.info("FreqNet: No faces found, falling back to raw image analysis.")
+                logger.info("FreqNet: Attached full raw image context for frequency analysis.")
             except Exception as e:
                 logger.warning(f"FreqNet: Failed to load raw image from {media_path}: {e}")
         

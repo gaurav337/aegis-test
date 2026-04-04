@@ -155,6 +155,7 @@ class UnivFDTool(BaseForensicTool):
         start_time = time.time()
         tracked_faces = input_data.get("tracked_faces", [])
         media_path = input_data.get("media_path", None)
+        first_frame = input_data.get("first_frame", None)
         
         # Build list of PIL crops to score
         pil_crops = []
@@ -171,12 +172,16 @@ class UnivFDTool(BaseForensicTool):
                 elif isinstance(face_crop, Image.Image):
                     pil_crops.append(face_crop)
         
-        # No-face fallback: use the raw image resized to 224x224
-        if not pil_crops and media_path:
+        # ALWAYS analyze the full image context (Crucial for detecting full-frame generative AI artifacts)
+        if first_frame is not None:
+            raw_img = Image.fromarray(first_frame).convert("RGB").resize((224, 224), Image.LANCZOS)
+            pil_crops.append(raw_img)
+            logger.info("UnivFD: Attached full video frame context for AI artifact analysis.")
+        elif media_path:
             try:
                 raw_img = Image.open(media_path).convert("RGB").resize((224, 224), Image.LANCZOS)
                 pil_crops.append(raw_img)
-                logger.info("UnivFD: No faces found, falling back to raw image analysis.")
+                logger.info("UnivFD: Attached full raw image context for AI artifact analysis.")
             except Exception as e:
                 logger.warning(f"UnivFD: Failed to load raw image from {media_path}: {e}")
         
