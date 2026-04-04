@@ -171,12 +171,12 @@ def _compute_conflict_std(implied_probs: List[float]) -> float:
 
 
 def _route(result: ToolResult, context: Dict[str, float],
-           use_confidence_weighting: bool = False) -> Tuple[float, float]:
+           use_confidence_weighting: bool = False) -> Tuple[float, float, bool]:
     
     if not result.success or getattr(result, "error_msg", None):
-        return (0.0, 0.0)
+        return (0.0, 0.0, True)
     if result.confidence <= 0.0:
-        return (0.0, 0.0)
+        return (0.0, 0.0, True)
     
     score = max(0.0, min(1.0, result.fake_score))
     tool_name = _normalize_tool_name(result.tool_name)
@@ -184,9 +184,9 @@ def _route(result: ToolResult, context: Dict[str, float],
     
     if base_weight == 0.0 and tool_name != "check_c2pa":
         logger.warning(f"Unknown tool '{tool_name}' has no weight mapping — abstaining.")
-        return (0.0, 0.0)
+        return (0.0, 0.0, True)
     if tool_name == "check_c2pa":
-        return (0.0, 0.0)
+        return (0.0, 0.0, False)
     
     # rPPG
     if tool_name == "run_rppg":
@@ -195,12 +195,12 @@ def _route(result: ToolResult, context: Dict[str, float],
         elif score > RPPG_PULSE_THRESHOLD_HIGH:
             contribution, weight = WEIGHT_RPPG * RPPG_NO_PULSE_IMPLIED_PROB, WEIGHT_RPPG
         else:
-            return (0.0, 0.0)
+            return (0.0, 0.0, True)
             
         if use_confidence_weighting:
             weight *= result.confidence
             contribution = (contribution / (WEIGHT_RPPG + 1e-10)) * weight
-        return (contribution, weight)
+        return (contribution, weight, False)
     
     # UnivFD & Xception
     if tool_name in ("run_univfd", "run_xception", "run_siglip_adapter"):
@@ -208,12 +208,12 @@ def _route(result: ToolResult, context: Dict[str, float],
         if use_confidence_weighting:
             weight *= result.confidence
             contribution = score * weight
-        return (contribution, weight)
+        return (contribution, weight, False)
     
     # SBI
     if tool_name == "run_sbi":
         if score < SBI_BLIND_SPOT_THRESHOLD:
-            return (0.0, 0.0)
+            return (0.0, 0.0, False)
         
         if score >= SBI_HIGH_CONFIDENCE_THRESHOLD:
             sbi_weight = WEIGHT_SBI
@@ -224,7 +224,7 @@ def _route(result: ToolResult, context: Dict[str, float],
             if use_confidence_weighting:
                 weight *= result.confidence
                 contribution = (contribution / (sbi_weight + 1e-10)) * weight
-            return (contribution, weight)
+            return (contribution, weight, False)
         
         # Mid-band
         clip_score = context.get("siglip_score", 0.5) if context.get("siglip_available", False) else 0.5
@@ -237,12 +237,12 @@ def _route(result: ToolResult, context: Dict[str, float],
         if use_confidence_weighting:
             weight *= result.confidence
             contribution = (contribution / (sbi_weight + 1e-10)) * weight
-        return (contribution, weight)
+        return (contribution, weight, False)
     
     # FreqNet
     if tool_name == "run_freqnet":
         if score < FREQNET_BLIND_SPOT_THRESHOLD:
-            return (0.0, 0.0)
+            return (0.0, 0.0, False)
         
         freqnet_weight = WEIGHT_FREQNET
         if context.get("compression_detected", False):
@@ -252,15 +252,24 @@ def _route(result: ToolResult, context: Dict[str, float],
         if use_confidence_weighting:
             weight *= result.confidence
             contribution = (contribution / (freqnet_weight + 1e-10)) * weight
-        return (contribution, weight)
+        return (contribution, weight, False)
     
-    # CPU Tools
+    # CPU Tools form
+    if tool_name == "run_corneal":
+        from utils.thresholds import CORNEAL_BLIND_SPOT_THRESHOLD
+        if score < CORNEAL_BLIND_SPOT_THRESHOLD:
+            return (0.0, 0.0, True)
+            
+    if tool_name == "run_illumination":
+        from utils.thresholds import ILLUMINATION_DIFFUSE_THRESHOLD
+        if score < ILLUMINATION_DIFFUSE_THRESHOLD:
+            return (0.0, 0.0, True)
+            
     contribution, weight = score * base_weight, base_weight
     if use_confidence_weighting:
         weight *= result.confidence
         contribution = score * weight
-    return (contribution, weight)
-
+    return (contribution, weight, False)
 
 def calculate_ensemble_score(
     tool_results: List[ToolResult],
@@ -321,17 +330,26 @@ def calculate_ensemble_score(
             abstentions.append({"tool_name": tool_name, "fake_score": result.fake_score, "reason": "tool_failed"})
             continue
         
-        contribution, effective_weight = _route(result, context, use_confidence_weighting)
+        contribution, effective_weight, is_abstention = _route(result, context, use_confidence_weighting)
         
-        # FIX #67: Micro-float precision guard for division
-        if effective_weight < 1e-9:
-            abstentions.append({"tool_name": tool_name, "fake_score": result.fake_score, "reason": "blind_spot"})
+        # True abstention (failed or confidently abstaining due to missing data like no face)
+        if is_abstention:
+            abstentions.append({"tool_name": tool_name, "fake_score": result.fake_score, "reason": "abstain_or_failure"})
         else:
             tools_ran.append(tool_name)
-            implied = contribution / effective_weight
-            implied_probs.append(implied)
-            if tool_name in GPU_SPECIALISTS:
-                gpu_specialist_probs.append(implied)
+            
+            # Even if effective_weight is 0 (e.g. SBI/FreqNet voting Real), it is NOT an abstention. 
+            # We track the implied prob only if weight was actually assigned.
+            if effective_weight > 1e-9:
+                implied = contribution / effective_weight
+                implied_probs.append(implied)
+                if tool_name in GPU_SPECIALISTS:
+                    gpu_specialist_probs.append(implied)
+            elif tool_name in GPU_SPECIALISTS:
+                # If a GPU specialist successfully runs but gives 0 weight (voted 100% Real),
+                # its implied 'fake' probability is 0.0.
+                implied_probs.append(0.0)
+                gpu_specialist_probs.append(0.0)
         
         total_contribution += contribution
         total_weight += effective_weight
@@ -401,15 +419,19 @@ def calculate_ensemble_score(
         # via the base weighted average but cannot unilaterally anchor the score.
         anomaly_anchor = max_gpu_prob
         
-        # We no longer disable anomaly anchors due to "conflict". GPU specialists detect
-        # orthogonal features (e.g., SBI for boundaries, UnivFD for generative GANs).
-        # One tool firing while others are silent is an expected behavioral pattern.
-        
         # Pick the strongest signal from all three sources
         candidate_score = max(base_ensemble, anomaly_anchor, consensus_anchor)
         
         # Apply GPU degradation boost (pushes fake_score UP when coverage is thin)
-        candidate_score = min(1.0, candidate_score * gpu_degradation_boost)
+        degraded_score = candidate_score * gpu_degradation_boost
+        
+        # CRITICAL FIX: Never let degradation boost push a fundamentally "REAL" score (< 0.50) into the "FAKE" zone (>= 0.50).
+        # We only manufacture FAKE verdicts if the base signal was already suspicious.
+        if candidate_score < 0.50 and degraded_score >= 0.50:
+            candidate_score = 0.4999
+            logger.info("Degradation boost capped at 0.4999 (was going to push REAL score to %.4f)", degraded_score)
+        else:
+            candidate_score = min(1.0, degraded_score)
         
         fake_score = round(max(0.0, min(1.0, candidate_score)), 4)
         
@@ -435,6 +457,7 @@ def calculate_ensemble_score(
         "conflict_std": round(conflict_std, 4),
         "has_conflict": has_conflict,
     }
+
     
     if return_metadata:
         output["weight_breakdown"] = weight_breakdown
@@ -490,6 +513,5 @@ class EnsembleAggregator:
         
     def get_verdict(self) -> str:
         score = self.get_final_score()
-        # ensemble_score is now REAL probability (1.0 = authentic, 0.0 = fake)
         # FAKE if real probability is below the real threshold
         return "FAKE" if score <= ENSEMBLE_REAL_THRESHOLD else "REAL"

@@ -55,8 +55,8 @@ ENSEMBLE_INCONCLUSIVE_WEIGHT = 0.50
 # their agreement is itself a corroborating signal of manipulation.
 BORDERLINE_CONSENSUS_LOW = 0.35  # Lower bound of the "borderline" zone
 BORDERLINE_CONSENSUS_HIGH = 0.55  # Upper bound of the "borderline" zone
-BORDERLINE_CONSENSUS_BOOST = 1.25  # Corroboration multiplier
-GPU_COVERAGE_DEGRADATION_FACTOR = 0.10  # Per-abstained specialist penalty boost
+BORDERLINE_CONSENSUS_BOOST = 1.10  # Reduced from 1.25 to prevent over-penalizing noise
+GPU_COVERAGE_DEGRADATION_FACTOR = 0.05  # Reduced from 0.10 per-abstained specialist
 
 # =============================================================================
 # COMPRESSION DISCOUNTS (Cross-tool)
@@ -152,18 +152,18 @@ DCT_HIGH_CONFIDENCE_RATIO = 0.95
 # NOTE: Human facial anatomy has natural variation. These ranges are calibrated
 # to avoid false positives on real faces with natural proportions.
 
-GEOMETRY_YAW_SKIP_THRESHOLD = 0.22  # Raised from 0.18 — allows slight head turns
-GEOMETRY_IPD_RATIO_MIN = 0.38  # Widened from 0.42 — natural IPD variation
-GEOMETRY_IPD_RATIO_MAX = 0.56  # Widened from 0.52
-GEOMETRY_PHILTRUM_RATIO_MIN = 0.08  # Widened from 0.10
-GEOMETRY_PHILTRUM_RATIO_MAX = 0.18  # Widened from 0.15
-GEOMETRY_EYE_ASYMMETRY_MAX = 0.06  # Widened from 0.05 — natural asymmetry exists
-GEOMETRY_NOSE_WIDTH_RATIO_MIN = 0.50  # Widened from 0.55
-GEOMETRY_NOSE_WIDTH_RATIO_MAX = 0.75  # Widened from 0.70
-GEOMETRY_MOUTH_WIDTH_RATIO_MIN = 0.80  # Widened from 0.85
-GEOMETRY_MOUTH_WIDTH_RATIO_MAX = 1.10  # Widened from 1.05
+GEOMETRY_YAW_SKIP_THRESHOLD = 0.25  # Raised from 0.22 — more tolerant of head turns
+GEOMETRY_IPD_RATIO_MIN = 0.35  # Widened from 0.38
+GEOMETRY_IPD_RATIO_MAX = 0.60  # Widened from 0.56
+GEOMETRY_PHILTRUM_RATIO_MIN = 0.06  # Widened from 0.08
+GEOMETRY_PHILTRUM_RATIO_MAX = 0.20  # Widened from 0.18
+GEOMETRY_EYE_ASYMMETRY_MAX = 0.08  # Widened from 0.06
+GEOMETRY_NOSE_WIDTH_RATIO_MIN = 0.45  # Widened from 0.50
+GEOMETRY_NOSE_WIDTH_RATIO_MAX = 0.80  # Widened from 0.75
+GEOMETRY_MOUTH_WIDTH_RATIO_MIN = 0.75  # Widened from 0.80
+GEOMETRY_MOUTH_WIDTH_RATIO_MAX = 1.15  # Widened from 1.10
 GEOMETRY_VERTICAL_THIRDS_MAX_DEVIATION = (
-    0.22  # Raised from 0.15 — selfie angles distort vertical proportions
+    0.26  # Raised from 0.22 — more tolerant of selfie camera distortion
 )
 GEOMETRY_LANDMARK_THRESHOLD = 0.8
 GEOMETRY_SYMMETRY_THRESHOLD = 0.7

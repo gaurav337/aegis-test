@@ -48,6 +48,12 @@ class AgentConfig:
     # C1: Omit for Ollama default (5min) - best for batch scanning
     ollama_keep_alive: Optional[int] = None
     
+    # === OPENROUTER SPECIFIC ===
+    use_openrouter: bool = False  # Runtime flag set by API endpoint
+    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
+    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
+
+    
     # === GENERATION SETTINGS ===
     llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
     llm_seed: int = int(os.getenv("LLM_SEED", "42"))

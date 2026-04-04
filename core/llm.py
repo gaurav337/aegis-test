@@ -1,21 +1,28 @@
 import asyncio
 import threading
 import queue
+import logging
 from typing import Dict, Any, Generator
 
 from core.data_types import ToolResult
 from core.config import AegisConfig
 from utils.ollama_client import OllamaClient
+from utils.openrouter_client import OpenRouterClient
 from core.forensic_summary import build_phi3_prompt
 
+logger = logging.getLogger(__name__)
 
 async def stream_completion(prompt: str, temperature: float = 0.1, max_tokens: int = 512):
     """
-    Asynchronous generator for streaming LLM completion via OllamaClient.
-    Used by forensic_summary.py's legacy generate_verdict function.
+    Asynchronous generator for streaming LLM completion via Client.
     """
     agent_config = AegisConfig().agent
-    client = OllamaClient(agent_config)
+    
+    if agent_config.use_openrouter:
+        client = OpenRouterClient(agent_config)
+    else:
+        client = OllamaClient(agent_config)
+        
     q = asyncio.Queue()
     
     async def stream_callback(token: str):
@@ -54,23 +61,23 @@ def generate_verdict(
     verdict: str,
 ) -> Generator[Any, None, str]:
     """
-    Generate LLM verdict using OllamaClient with streaming support.
-    Bridges asynchronous OllamaClient with the synchronous ForensicAgent.
+    Generate LLM verdict using either OllamaClient or OpenRouterClient
+    with streaming support. Bridges asynchronous Client with the synchronous ForensicAgent.
     """
     prompt = build_phi3_prompt(ensemble_score, tool_results, verdict)
     agent_config = AegisConfig().agent
     q = queue.Queue()
     
     def async_runner():
-        # Create a FRESH event loop in this thread.
-        # asyncio.run() raises "This event loop is already running" when called
-        # from inside FastAPI's async event loop. Using a new loop in a
-        # dedicated thread is the correct bridge pattern.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             async def run():
-                client = OllamaClient(agent_config)
+                if agent_config.use_openrouter:
+                    client = OpenRouterClient(agent_config)
+                else:
+                    client = OllamaClient(agent_config)
+                    
                 async with client:
                     def stream_callback(token: str):
                         q.put(token)

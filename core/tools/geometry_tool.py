@@ -348,9 +348,9 @@ class GeometryTool(BaseForensicTool):
         self,
         checks_performed: int,
         yaw_proxy: float,
-        face_width: float,
+        pixel_width: float,
     ) -> float:
-        """Confidence adjusts based on checks performed, yaw, and face size."""
+        """Confidence adjusts based on checks performed, yaw, and face resolution."""
         base = 0.8
 
         if checks_performed < 4:
@@ -359,10 +359,11 @@ class GeometryTool(BaseForensicTool):
         if yaw_proxy > 0.12:
             base *= 0.85
 
-        if face_width < 80:
-            base *= 0.75
-        elif face_width < 120:
-            base *= 0.90
+        # Resolution-based confidence dampening
+        if pixel_width < 80:
+            base *= 0.60
+        elif pixel_width < 120:
+            base *= 0.85
 
         return round(min(base, 0.95), 2)
 
@@ -424,6 +425,10 @@ class GeometryTool(BaseForensicTool):
         face_results = []
 
         for face in tracked_faces:
+            # FIX: Safe extraction of crops (avoiding 'or' on numpy arrays)
+            face_crop = face.get("face_crop_380")
+            if face_crop is None:
+                face_crop = face.get("face_crop_224")
             landmarks = face.get("landmarks")
             trajectory_bboxes = face.get("trajectory_bboxes", {})
 
@@ -578,9 +583,20 @@ class GeometryTool(BaseForensicTool):
                 violations, severities, skip_bilateral=skip_bilateral
             )
 
+            # --- FIX: Resolution-Aware Scaling ---
+            # Estimate pixel width based on crop size
+            crop_h, crop_w = face_crop.shape[:2]
+            pixel_width = face_width * crop_w
+
+            if pixel_width < 120:
+                # Dampen fake score for low-res faces to avoid noise-driven false positives
+                # If width=60, dampen=0.75x. If width=120, dampen=1.0x.
+                dampening = max(0.7, 0.7 + (0.3 * (pixel_width - 60) / 60))
+                fake_score *= dampening
+
             # --- Calculate Confidence ---
             confidence = self._calculate_confidence(
-                checks_performed, yaw_proxy, face_width
+                checks_performed, yaw_proxy, pixel_width
             )
 
             face_results.append(

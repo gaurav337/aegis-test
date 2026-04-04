@@ -347,10 +347,8 @@ class UnivFDTool(BaseForensicTool):
 
         execution_time = time.time() - start_time
 
-        # FIX 6: Confidence based on distance from threshold (not 0.5)
-        raw_confidence = (
-            self.conf_min + abs(worst_face_score - effective_threshold) * 1.5
-        )
+        # FIX 6: Parabolic confidence (Low near threshold, high as it moves away)
+        raw_confidence = self.conf_min + (4.0 * (worst_face_score - effective_threshold) ** 2)
         confidence = max(self.conf_min, min(1.0, raw_confidence))
 
         # FIX 4: Phone-aware verdict messaging

@@ -350,8 +350,10 @@ class CornealTool(BaseForensicTool):
         face_results = []
 
         for face in tracked_faces:
-            # FIX 1: Prefer 380×380 crop for larger iris
-            face_crop = face.get("face_crop_380") or face.get("face_crop_224")
+            # FIX: Replace 'or' on numpy arrays to avoid truthiness ambiguity
+            face_crop = face.get("face_crop_380")
+            if face_crop is None:
+                face_crop = face.get("face_crop_224")
             landmarks = face.get("landmarks")
             trajectory_bboxes = face.get("trajectory_bboxes", {})
             best_frame_idx = face.get("best_frame_idx", 0)

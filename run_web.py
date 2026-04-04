@@ -23,8 +23,10 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 from fastapi.responses import JSONResponse, StreamingResponse
 import json
 
+from fastapi import FastAPI, UploadFile, File, Form, Request
+
 @app.post("/api/analyze")
-async def analyze_media(file: UploadFile = File(...)):
+async def analyze_media(file: UploadFile = File(...), use_openrouter: str = Form("false")):
     try:
         # Save temp file
         file_path = UPLOAD_DIR / file.filename
@@ -38,6 +40,8 @@ async def analyze_media(file: UploadFile = File(...)):
         from core.agent import ForensicAgent
         
         async def event_generator():
+            # Apply API override for OpenRouter
+            config.agent.use_openrouter = (use_openrouter.lower() == "true")
             agent = ForensicAgent(config)
             
             # Send initial success event (faces_detected can be 0 for no-face pipeline)

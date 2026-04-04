@@ -108,6 +108,11 @@ document.addEventListener("DOMContentLoaded", () => {
             const formData = new FormData();
             formData.append('file', currentFile);
             
+            const openRouterToggle = document.getElementById('openrouter-toggle');
+            if (openRouterToggle) {
+                formData.append('use_openrouter', openRouterToggle.checked ? "true" : "false");
+            }
+            
             const response = await fetch('/api/analyze', {
                 method: 'POST',
                 body: formData

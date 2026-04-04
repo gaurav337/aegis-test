@@ -48,11 +48,19 @@
                         <div class="preview-badge">Ready for Analysis</div>
                     </div>
                     <div class="action-buttons">
+                        <div class="toggle-container" style="display: flex; align-items: center; gap: 0.5rem; justify-content: center; margin-bottom: 1rem;">
+                            <label class="switch">
+                                <input type="checkbox" id="openrouter-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                            <span style="color: var(--text-light); font-size: 0.9rem;">Use OpenRouter Cloud LLM</span>
+                        </div>
                         <button class="btn btn-primary analyze-btn" id="analyze-btn">Analyze Media</button>
                         <button class="btn btn-ghost remove-btn" id="remove-btn">Remove Media</button>
                     </div>
                 </div>
             </div>
+
 
             <!-- Loader Section -->
             <div class="loader-section hidden" id="loader">

@@ -365,25 +365,17 @@ class XceptionTool(BaseForensicTool):
                     model, patches, device
                 )
 
+                # The dampening logic expects the highest base suspicion before dampening is applied.
+                # If the full crop is highly suspicious (e.g. 0.50) but perfectly uniform (std=0.002),
+                # it is an ISP false positive and MUST be dampened.
+                base_score_to_dampen = max(full_crop_score, patch_mean)
+
                 # Apply consistency dampening
                 adjusted_score, consistency_note = self._apply_consistency_dampening(
-                    patch_mean, patch_std
+                    base_score_to_dampen, patch_std
                 )
 
-                # Use the higher of full-crop and consistency-adjusted patch score
-                # This prevents over-dampening when full crop is genuinely suspicious
-                if (
-                    full_crop_score > adjusted_score
-                    and full_crop_score > PATCH_ACTIVATION_SCORE
-                ):
-                    # Full crop is higher — use it but still log the consistency note
-                    final_score = full_crop_score
-                    logger.info(
-                        f"Xception: full_crop={full_crop_score:.3f} > adjusted_patch={adjusted_score:.3f}, "
-                        f"using full_crop. Note: {consistency_note}"
-                    )
-                else:
-                    final_score = adjusted_score
+                final_score = adjusted_score
 
                 worst_face_score = max(worst_face_score, final_score)
 
