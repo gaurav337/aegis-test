@@ -243,8 +243,14 @@ class XceptionTool(BaseForensicTool):
         # FIX: Grayscale evasion (destroying variance) should NOT trigger the safety dampening
         if is_grayscale:
             if std_score < PATCH_STD_THRESHOLD:
-                return mean_score, f"Patch std={std_score:.4f} < {PATCH_STD_THRESHOLD}: Dampening blocked due to GRAYSCALE evasion"
-            return mean_score, f"Patch std={std_score:.3f} >= {PATCH_STD_THRESHOLD}: localized artifacts detected in grayscale"
+                return (
+                    mean_score,
+                    f"Patch std={std_score:.4f} < {PATCH_STD_THRESHOLD}: Dampening blocked due to GRAYSCALE evasion",
+                )
+            return (
+                mean_score,
+                f"Patch std={std_score:.3f} >= {PATCH_STD_THRESHOLD}: localized artifacts detected in grayscale",
+            )
 
         if std_score >= PATCH_STD_THRESHOLD:
             # High variance → localized artifacts → likely real deepfake
@@ -274,7 +280,7 @@ class XceptionTool(BaseForensicTool):
         """Returns the fake probability."""
         outputs = model(tensor)  # (1, 2)
         probs = F.softmax(outputs, dim=1)
-        # Class 1 is usually the fake class in standard FF++ pretraining
+        # Class 1 is the fake class for this checkpoint (FaceForensics++ format)
         return float(probs[0, 1].item())
 
     def _run_inference(self, input_data: dict) -> ToolResult:

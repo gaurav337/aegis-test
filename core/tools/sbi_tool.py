@@ -95,8 +95,8 @@ class SBITool(BaseForensicTool):
 
     def _load_model(self) -> torch.nn.Module:
         """Load EfficientNet-B4 for SBI detection.
-        
-        The checkpoint was saved from `efficientnet_pytorch` (keys: net._conv_stem, 
+
+        The checkpoint was saved from `efficientnet_pytorch` (keys: net._conv_stem,
         net._blocks, etc.), NOT torchvision (keys: features.0.0, features.1.0.block).
         We MUST use the matching architecture or key mapping.
         """
@@ -104,14 +104,19 @@ class SBITool(BaseForensicTool):
         use_efficientnet_pytorch = False
         try:
             from efficientnet_pytorch import EfficientNet
-            model = EfficientNet.from_name('efficientnet-b4')
+
+            model = EfficientNet.from_name("efficientnet-b4")
             num_features = model._fc.in_features
             # Checkpoint has 2-class output (class 0=real, class 1=fake)
             model._fc = nn.Linear(num_features, 2)
             use_efficientnet_pytorch = True
-            logger.info("SBI: Using efficientnet_pytorch architecture (matches checkpoint)")
+            logger.info(
+                "SBI: Using efficientnet_pytorch architecture (matches checkpoint)"
+            )
         except ImportError:
-            logger.warning("SBI: efficientnet_pytorch not available. Falling back to torchvision with key remapping.")
+            logger.warning(
+                "SBI: efficientnet_pytorch not available. Falling back to torchvision with key remapping."
+            )
             model = models.efficientnet_b4(weights=None)
             num_features = model.classifier[1].in_features
             model.classifier = nn.Sequential(
@@ -142,32 +147,42 @@ class SBITool(BaseForensicTool):
                     state_dict = state_dict["state_dict"]
                 elif "model" in state_dict:
                     state_dict = state_dict["model"]
-                
+
                 # Strip 'net.' prefix from checkpoint keys
                 # Checkpoint keys: net._conv_stem.weight -> _conv_stem.weight
                 if use_efficientnet_pytorch:
                     cleaned = {}
                     for k, v in state_dict.items():
-                        new_k = k[4:] if k.startswith('net.') else k
+                        new_k = k[4:] if k.startswith("net.") else k
                         cleaned[new_k] = v
                     state_dict = cleaned
-                
+
                 load_result = model.load_state_dict(state_dict, strict=False)
-                
+
                 # Verify that weights actually loaded
                 total_model_keys = len(model.state_dict())
-                missing_count = len(load_result.missing_keys) if load_result.missing_keys else 0
+                missing_count = (
+                    len(load_result.missing_keys) if load_result.missing_keys else 0
+                )
                 matched_count = total_model_keys - missing_count
-                
+
                 if matched_count < total_model_keys * 0.5:
-                    logger.error(f"SBI: Only {matched_count}/{total_model_keys} keys matched! Weights NOT loaded.")
+                    logger.error(
+                        f"SBI: Only {matched_count}/{total_model_keys} keys matched! Weights NOT loaded."
+                    )
                     logger.error(f"  Missing (first 5): {load_result.missing_keys[:5]}")
-                    logger.error(f"  Checkpoint (first 5): {list(state_dict.keys())[:5]}")
+                    logger.error(
+                        f"  Checkpoint (first 5): {list(state_dict.keys())[:5]}"
+                    )
                     self._weights_loaded_ok = False
                 else:
                     if load_result.missing_keys:
-                        logger.info(f"SBI: {missing_count} missing keys (expected for classifier head changes)")
-                    logger.info(f"SBI weights loaded from {weight_path} ({matched_count}/{total_model_keys} keys matched)")
+                        logger.info(
+                            f"SBI: {missing_count} missing keys (expected for classifier head changes)"
+                        )
+                    logger.info(
+                        f"SBI weights loaded from {weight_path} ({matched_count}/{total_model_keys} keys matched)"
+                    )
                     self._weights_loaded_ok = True
             except Exception as e:
                 logger.warning(f"Failed to load SBI weights: {e}. Using random init.")
@@ -496,10 +511,18 @@ class SBITool(BaseForensicTool):
                     out_115 = model(tensor_115)
                     out_125 = model(tensor_125)
 
-                    # 2-class model: class 0=fake, class 1=real
+                    # 2-class model: class 0=real, class 1=fake (checkpoint convention)
                     import torch.nn.functional as F_sbi
-                    score_115 = F_sbi.softmax(out_115, dim=1)[0, 0].item()
-                    score_125 = F_sbi.softmax(out_125, dim=1)[0, 0].item()
+
+                    SBI_TEMPERATURE = (
+                        3.0  # Desaturates extreme logits for better calibration
+                    )
+                    score_115 = F_sbi.softmax(out_115 / SBI_TEMPERATURE, dim=1)[
+                        0, 1
+                    ].item()
+                    score_125 = F_sbi.softmax(out_125 / SBI_TEMPERATURE, dim=1)[
+                        0, 1
+                    ].item()
 
                 # FIX 2: Track both scales but use average for final score
                 scores_per_scale["1.15x"] = max(scores_per_scale["1.15x"], score_115)
@@ -592,4 +615,3 @@ class SBITool(BaseForensicTool):
             execution_time=execution_time,
             evidence_summary=summary,
         )
-

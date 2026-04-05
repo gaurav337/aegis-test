@@ -35,14 +35,18 @@ FALLBACK_FPS = 30.0  # Fallback FPS for OpenCV
 # ENSEMBLE WEIGHTS (Day 15)
 # =============================================================================
 
-WEIGHT_UNIVFD = 0.22
-WEIGHT_SIGLIP = 0.22  # Alias for backward compatibility
-WEIGHT_XCEPTION = 0.15
-WEIGHT_SBI = 0.25
-WEIGHT_FREQNET = 0.10
+# Working GPU tools (calibrated):
+WEIGHT_UNIVFD = 0.05  # Reduced: 4KB probe is broken, returns ~0.41 for everything
+WEIGHT_SIGLIP = 0.05  # Alias for backward compatibility
+WEIGHT_XCEPTION = 0.25  # Increased: working correctly, gives discriminative scores
+WEIGHT_SBI = (
+    0.20  # Reduced from 0.25: temperature scaled, still useful but less dominant
+)
+WEIGHT_FREQNET = 0.05  # Reduced: neural model barely works, FAD fallback noisy
+# CPU tools:
 WEIGHT_RPPG = 0.06
-WEIGHT_DCT = 0.04
-WEIGHT_GEOMETRY = 0.08
+WEIGHT_DCT = 0.10  # Increased: working reasonably well
+WEIGHT_GEOMETRY = 0.12  # Increased: reliable structural analysis
 WEIGHT_ILLUMINATION = 0.04
 WEIGHT_CORNEAL = 0.04
 WEIGHT_C2PA = 0.05
@@ -268,7 +272,15 @@ C2PA_CACHE_EXPIRY_SECONDS = 3600
 # =============================================================================
 
 CONFLICT_STD_THRESHOLD = 0.20
-SUSPICION_OVERRIDE_THRESHOLD = 0.70  # Max-pool fires when any GPU specialist above this
+SUSPICION_OVERRIDE_THRESHOLD = (
+    0.90  # Raised from 0.70 — requires near-certain single-tool evidence
+)
+OVERRIDE_AGREEMENT_THRESHOLD = (
+    0.80  # Individual tool must exceed this to count toward agreement
+)
+OVERRIDE_MIN_AGREEMENT = (
+    2  # At least N working GPU tools must agree to trigger overdrive
+)
 EMA_SMOOTHING_ALPHA = 0.30
 EMA_SMOOTHING_ENABLED = True
 

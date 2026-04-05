@@ -48,12 +48,13 @@ FAD_ANOMALY_BOOST = 0.15  # Modest boost when FAD detects anomaly
 
 class _CNNDetect(nn.Module):
     """ResNet-50 binary classifier for CNN-generated image detection.
-    
+
     IMPORTANT: Layers are exposed as direct attributes (conv1, bn1, layer1, etc.)
-    to preserve the original ResNet50 state_dict key names. Do NOT wrap in 
+    to preserve the original ResNet50 state_dict key names. Do NOT wrap in
     nn.Sequential — that renames keys to features.0, features.1, etc., breaking
     checkpoint loading with strict=False (silently runs on random weights).
     """
+
     def __init__(self):
         super().__init__()
         backbone = models.resnet50(weights=None)
@@ -82,7 +83,6 @@ class _CNNDetect(nn.Module):
         x = self.avgpool(x)
         x = x.flatten(start_dim=1)  # (B, 2048)
         return self.classifier(x)  # (B, 1) logit
-
 
 
 class FreqNetTool(BaseForensicTool):
@@ -145,20 +145,28 @@ class FreqNetTool(BaseForensicTool):
 
                 remapped = self._remap_cnndetect_keys(ckpt)
                 load_result = model.load_state_dict(remapped, strict=False)
-                
+
                 # Verify that weights actually loaded
                 total_model_keys = len(model.state_dict())
-                missing_count = len(load_result.missing_keys) if load_result.missing_keys else 0
+                missing_count = (
+                    len(load_result.missing_keys) if load_result.missing_keys else 0
+                )
                 matched_count = total_model_keys - missing_count
-                
+
                 if matched_count < total_model_keys * 0.9:
-                    logger.error(f"FreqNet: Only {matched_count}/{total_model_keys} keys matched! Weights NOT loaded correctly.")
+                    logger.error(
+                        f"FreqNet: Only {matched_count}/{total_model_keys} keys matched! Weights NOT loaded correctly."
+                    )
                     logger.error(f"  Missing (first 5): {load_result.missing_keys[:5]}")
-                    logger.error(f"  Unexpected (first 5): {load_result.unexpected_keys[:5]}")
+                    logger.error(
+                        f"  Unexpected (first 5): {load_result.unexpected_keys[:5]}"
+                    )
                     self._weights_loaded_ok = False
                 else:
                     self._weights_loaded_ok = True
-                    logger.info(f"FreqNet (CNNDetect) weights loaded from {weight_path} ({matched_count}/{total_model_keys} keys matched)")
+                    logger.info(
+                        f"FreqNet (CNNDetect) weights loaded from {weight_path} ({matched_count}/{total_model_keys} keys matched)"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to load CNNDetect weights: {e}")
                 self._weights_loaded_ok = False
@@ -365,17 +373,19 @@ class FreqNetTool(BaseForensicTool):
 
                 # FIX 4: FAD as gate — modulate neural score, don't average
                 if self._weights_loaded_ok:
-                    if median_fad > 0:
+                    if (
+                        median_fad > 0 and False
+                    ):  # DISABLED: FAD gives false positives on real images
                         # FAD detected anomaly — boost neural score modestly
                         final_score = min(
                             1.0, neural_score + (median_fad * FAD_ANOMALY_BOOST)
                         )
                     else:
-                        # FAD found nothing anomalous — trust neural score
+                        # Trust neural score only — FAD is too noisy
                         final_score = neural_score
                 else:
-                    # No neural model — use FAD alone (less reliable)
-                    final_score = median_fad
+                    # No neural model — FAD alone is unreliable, abstain
+                    final_score = 0.0
 
                 if final_score > worst_face_score:
                     worst_face_score = final_score
