@@ -32,8 +32,8 @@ RELATIVE_BRIGHTNESS_SIGMA = 3.5  # Catchlight must be 3.5σ above iris median
 ABSOLUTE_MIN_BRIGHTNESS = 150    # Lowered from 180 (HDR/underexposed handling)
 MAX_GEOMETRIC_DIVERGENCE = np.sqrt(8)  # ≈ 2.83 (max possible in normalized offset space)
 POSE_DIVERGENCE_MULTIPLIER = 0.03  # Per degree of head rotation
-GLASSES_EDGE_THRESHOLD = 80        # Minimum gradient for frame edge detection
-GLASSES_MIN_EDGE_LENGTH = 12       # Minimum edge segment length (pixels)
+GLASSES_EDGE_THRESHOLD = 120
+GLASSES_MIN_EDGE_LENGTH = 16
 
 
 class CornealTool(BaseForensicTool):
@@ -69,10 +69,20 @@ class CornealTool(BaseForensicTool):
                 x2 = min(w, nose_bridge_x + line_width)
                 line = gray[nose_bridge_y, x1:x2]
 
-                if len(line) > 4:
-                    gradients = np.abs(np.diff(line.astype(np.float32)))
-                    strong_edges = np.sum(gradients > GLASSES_EDGE_THRESHOLD)
-                    if strong_edges >= 2:
+                if len(line) > 10:
+                    mid = len(line) // 2
+                    left_side = line[:mid]
+                    right_side = line[mid:]
+                    
+                    left_grad = np.abs(np.diff(left_side.astype(np.float32)))
+                    right_grad = np.abs(np.diff(right_side.astype(np.float32)))
+                    
+                    left_edges = np.sum(left_grad > GLASSES_EDGE_THRESHOLD)
+                    right_edges = np.sum(right_grad > GLASSES_EDGE_THRESHOLD)
+                    
+                    # Robust glasses frame check: symmetry + strong gradients
+                    if left_edges >= 1 and right_edges >= 1:
+                        logger.info("Corneal: Confirmed glasses bridge via symmetric gradients.")
                         return True
 
         # Check 2: Canny edge detection in eye region — look for rectangular patterns

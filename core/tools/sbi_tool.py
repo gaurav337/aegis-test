@@ -16,6 +16,7 @@ Key Fixes:
 7. FIX 7: Removed per-face VRAM flush (unnecessary overhead)
 8. C-06: Calibrated confidence based on GradCAM boundary clarity
 """
+
 import os
 import torch
 import torch.nn as nn
@@ -124,7 +125,9 @@ class SBITool(BaseForensicTool):
             # Checkpoint has 2-class output (class 0=real, class 1=fake)
             model._fc = nn.Linear(num_features, 2)
             use_efficientnet_pytorch = True
-            logger.info("SBI: Using efficientnet_pytorch architecture (matches checkpoint)")
+            logger.info(
+                "SBI: Using efficientnet_pytorch architecture (matches checkpoint)"
+            )
         except ImportError:
             logger.warning(
                 "SBI: efficientnet_pytorch not available. Falling back to torchvision with key remapping."
@@ -264,8 +267,11 @@ class SBITool(BaseForensicTool):
         transformed_landmarks[:, 0] = (landmarks[:, 0] * w + pad_left) * scale_x
         transformed_landmarks[:, 1] = (landmarks[:, 1] * h + pad_top) * scale_y
 
+        # 4.5 Convert BGR to RGB (Critical for PyTorch pre-trained models)
+        crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
         # 5. Tensor Conversion
-        tensor = torch.from_numpy(crop).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        tensor = torch.from_numpy(crop_rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0
         tensor = self.normalize(tensor)
 
         return tensor, transformed_landmarks
@@ -297,7 +303,7 @@ class SBITool(BaseForensicTool):
 
         try:
             output = model(input_tensor)
-            score = output[0, 0]
+            score = output[0, 0]  # Class 0 is FAKE in this checkpoint
             model.zero_grad()
             score.backward()
 
@@ -439,7 +445,7 @@ class SBITool(BaseForensicTool):
 
         # FIX #5: Context passing for compression/grayscale detection
         context = input_data.get("context", {})
-        visual_score = context.get("siglip_score", context.get("clip_score", 0.0))
+        visual_score = context.get("univfd_score", context.get("clip_score", 0.0))
         is_grayscale = context.get("is_grayscale", False)
         compression_detected = context.get("compression_detected", False)
 
@@ -546,12 +552,14 @@ class SBITool(BaseForensicTool):
                     # 2-class model: class 0=real, class 1=fake (checkpoint convention)
                     import torch.nn.functional as F_sbi
 
-                    SBI_TEMPERATURE = 3.0  # Desaturates extreme logits for better calibration
+                    SBI_TEMPERATURE = (
+                        3.0  # Desaturates extreme logits for better calibration
+                    )
                     score_115 = F_sbi.softmax(out_115 / SBI_TEMPERATURE, dim=1)[
-                        0, 1
+                        0, 0
                     ].item()
                     score_125 = F_sbi.softmax(out_125 / SBI_TEMPERATURE, dim=1)[
-                        0, 1
+                        0, 0
                     ].item()
 
                 # FIX 2: Track both scales but use average for final score
@@ -600,13 +608,19 @@ class SBITool(BaseForensicTool):
                 del tensor_115, tensor_125
 
                 # FIX M-06: Collect per-face details for transparent reporting
-                per_face_details.append({
-                    "scale_115_score": round(score_115, 4),
-                    "scale_125_score": round(score_125, 4),
-                    "avg_score": round(avg_score, 4),
-                    "boundary_detected": boundary_detected if avg_score > SBI_FAKE_THRESHOLD else False,
-                    "boundary_region": best_boundary_region if avg_score > SBI_FAKE_THRESHOLD else None,
-                })
+                per_face_details.append(
+                    {
+                        "scale_115_score": round(score_115, 4),
+                        "scale_125_score": round(score_125, 4),
+                        "avg_score": round(avg_score, 4),
+                        "boundary_detected": boundary_detected
+                        if avg_score > SBI_FAKE_THRESHOLD
+                        else False,
+                        "boundary_region": best_boundary_region
+                        if avg_score > SBI_FAKE_THRESHOLD
+                        else None,
+                    }
+                )
 
         execution_time = time.time() - start_time
 
@@ -621,7 +635,9 @@ class SBITool(BaseForensicTool):
         # Apply compression discount if detected
         if compression_detected:
             final_score *= SBI_COMPRESSION_DISCOUNT
-            logger.info(f"SBI: Compression detected — score dampened by {SBI_COMPRESSION_DISCOUNT}x")
+            logger.info(
+                f"SBI: Compression detected — score dampened by {SBI_COMPRESSION_DISCOUNT}x"
+            )
 
         # Evidence summary
         if boundary_detected:

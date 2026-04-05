@@ -34,6 +34,7 @@ logger = setup_logger(__name__)
 # Hardware Detection
 # ──────────────────────────────────────────────────────────────
 
+
 def get_device() -> torch.device:
     """Auto-detects the best available accelerator hardware sequentially.
 
@@ -54,7 +55,9 @@ def get_device() -> torch.device:
                 tpu_devices = [d for d in supported_devices if "TPU" in d.upper()]
                 if tpu_devices:
                     device = xm.xla_device()
-                    logger.info(f"TPU detected: {tpu_devices[0]}. Using XLA accelerator.")
+                    logger.info(
+                        f"TPU detected: {tpu_devices[0]}. Using XLA accelerator."
+                    )
                     return device
                 else:
                     logger.warning(
@@ -103,12 +106,14 @@ def log_vram_status(tag: str, device_id: int = 0) -> None:
 # Memory Query Helpers
 # ──────────────────────────────────────────────────────────────
 
+
 def _get_available_vram_gb() -> float:
     """Safely detect total VRAM/HBM in GB. Returns 0.0 if no accelerator."""
     # TPU Memory Detection
     if ENABLE_TPU_SUPPORT:
         try:
             import torch_xla.core.xla_model as xm
+
             device = xm.xla_device()
             memory_info = xm.get_memory_info(device)
             if memory_info and "bytes_limit" in memory_info:
@@ -132,26 +137,24 @@ def _get_available_vram_gb() -> float:
 
 def _get_used_memory_gb() -> float:
     """Get currently allocated memory in GB (device-specific)."""
-    device = get_device()
+    # CUDA Memory Usage (check first — most common)
+    if torch.cuda.is_available():
+        try:
+            return torch.cuda.memory_allocated(0) / (1024**3)
+        except Exception:
+            pass
 
     # TPU Memory Usage
-    if device.type == "xla":
+    if ENABLE_TPU_SUPPORT:
         try:
             import torch_xla.core.xla_model as xm
+
+            device = xm.xla_device()
             memory_info = xm.get_memory_info(device)
             if memory_info and "bytes_used" in memory_info:
                 return memory_info["bytes_used"] / (1024**3)
         except Exception:
             pass
-        return 0.0
-
-    # CUDA Memory Usage
-    if device.type == "cuda":
-        try:
-            return torch.cuda.memory_allocated(0) / (1024**3)
-        except Exception:
-            pass
-        return 0.0
 
     return 0.0
 
@@ -214,8 +217,8 @@ def _check_available_vram(required_gb: float = 2.0) -> bool:
             return False
 
         try:
-            allocated_gb = torch.cuda.memory_allocated(0) / (1024**3)
-            free_gb = total_vram - allocated_gb - VRAM_RESERVED_BUFFER_GB
+            reserved_gb = torch.cuda.memory_reserved(0) / (1024**3)
+            free_gb = total_vram - reserved_gb - VRAM_RESERVED_BUFFER_GB
             if free_gb < required_gb:
                 logger.warning(
                     f"Insufficient free VRAM: {free_gb:.1f}GB available, "
@@ -233,6 +236,7 @@ def _check_available_vram(required_gb: float = 2.0) -> bool:
 # Device-Specific Cleanup
 # ──────────────────────────────────────────────────────────────
 
+
 def _cleanup_device_memory(device: torch.device) -> None:
     """
     Device-specific memory cleanup.
@@ -247,6 +251,7 @@ def _cleanup_device_memory(device: torch.device) -> None:
             # TPU-specific cleanup
             try:
                 import torch_xla.core.xla_model as xm
+
                 xm.mark_step()  # Synchronize and free intermediate buffers
                 logger.debug("TPU memory cleanup: xm.mark_step() called")
             except Exception as e:
@@ -280,11 +285,13 @@ def _cleanup_device_memory(device: torch.device) -> None:
 # VRAM Lock Watchdog (m-01 Fix)
 # ──────────────────────────────────────────────────────────────
 
+
 class _VRAMLockWatchdog:
     """
     Watchdog thread that force-releases the accelerator lock if held too long.
     Prevents permanent deadlock from hard crashes (segfaults, OOM kills, etc.).
     """
+
     _watchdog_thread: Optional[threading.Thread] = None
     _lock_held_since: Optional[float] = None
     _lock: Optional[threading.RLock] = None
@@ -323,7 +330,9 @@ class _VRAMLockWatchdog:
                     break
                 time.sleep(5.0)  # Check every 5 seconds
 
-        cls._watchdog_thread = threading.Thread(target=_watch, daemon=True, name="VRAMWatchdog")
+        cls._watchdog_thread = threading.Thread(
+            target=_watch, daemon=True, name="VRAMWatchdog"
+        )
         cls._watchdog_thread.start()
 
     @classmethod
@@ -336,6 +345,7 @@ class _VRAMLockWatchdog:
 # ──────────────────────────────────────────────────────────────
 # VRAM Lifecycle Manager
 # ──────────────────────────────────────────────────────────────
+
 
 class VRAMLifecycleManager:
     """
@@ -398,7 +408,7 @@ class VRAMLifecycleManager:
         # Start watchdog to prevent permanent deadlock on hard crashes
         _VRAMLockWatchdog.start(
             self.__class__._accelerator_lock,
-            timeout=self.__class__._LOCK_TIMEOUT_SECONDS + 15.0
+            timeout=self.__class__._LOCK_TIMEOUT_SECONDS + 15.0,
         )
         self._watchdog_started = True
 
@@ -428,11 +438,13 @@ class VRAMLifecycleManager:
             # Log model stats
             total_params = (
                 sum(p.numel() for p in self.model.parameters())
-                if hasattr(self.model, "parameters") else 0
+                if hasattr(self.model, "parameters")
+                else 0
             )
             nonzero_params = (
                 sum((p != 0).sum().item() for p in self.model.parameters())
-                if hasattr(self.model, "parameters") else 0
+                if hasattr(self.model, "parameters")
+                else 0
             )
             logger.info(
                 f"[{self.model_name}] Params: {total_params:,}, Non-zero: {nonzero_params:,}"
@@ -442,12 +454,15 @@ class VRAMLifecycleManager:
             if self.device.type == "cuda":
                 try:
                     allocated_mb = torch.cuda.memory_allocated(0) / (1024**2)
-                    logger.info(f"[{self.model_name}] CUDA allocated: {allocated_mb:.0f}MB")
+                    logger.info(
+                        f"[{self.model_name}] CUDA allocated: {allocated_mb:.0f}MB"
+                    )
                 except Exception:
                     pass
             elif self.device.type == "xla":
                 try:
                     import torch_xla.core.xla_model as xm
+
                     memory_info = xm.get_memory_info(self.device)
                     if memory_info and "bytes_used" in memory_info:
                         used_mb = memory_info["bytes_used"] / (1024**2)
@@ -479,16 +494,32 @@ class VRAMLifecycleManager:
     def _safe_cleanup(self) -> None:
         """
         EXACT ORDER MUST BE FOLLOWED:
-        1. Move model to CPU (drop accelerator memory instantly)
+        1. Capture device type from model BEFORE moving to CPU
         2. Synchronize device (wait for pending ops)
-        3. Delete model reference
-        4. Device-specific cleanup (TPU/CUDA/MPS)
-        5. Universal garbage collection
-        6. Stop watchdog + release lock (in finally)
+        3. Move model to CPU (drop accelerator memory instantly)
+        4. Delete model reference
+        5. Device-specific cleanup (TPU/CUDA/MPS)
+        6. Universal garbage collection
+        7. Stop watchdog + release lock (in finally)
         """
         try:
+            # Step 0: Capture actual device type from model before moving it
+            model_device_type = self.device.type
+            if self.model is not None and hasattr(self.model, "device"):
+                try:
+                    model_device_type = str(self.model.device).split(":")[0]
+                except Exception:
+                    pass
+
             # Step 1: Unbind model from accelerator memory
             if self.model is not None:
+                # Wait for pending async ops BEFORE moving to CPU
+                if model_device_type == "cuda" and torch.cuda.is_available():
+                    try:
+                        torch.cuda.synchronize()
+                    except Exception:
+                        pass
+
                 # Force parameters to CPU to instantly free accelerator memory
                 if hasattr(self.model, "to"):
                     try:
@@ -496,26 +527,12 @@ class VRAMLifecycleManager:
                     except Exception as e:
                         logger.debug(f"Model.to('cpu') failed: {e}")
 
-                # Wait for pending async ops before dropping reference
-                if torch.cuda.is_available():
-                    try:
-                        torch.cuda.synchronize()
-                    except Exception:
-                        pass
-
                 # Delete reference to allow GC
                 del self.model
             self.model = None
 
             # Step 2: Device-specific cleanup (TPU/CUDA/MPS)
-            _cleanup_device_memory(self.device)
-
-            # Step 3: Extra CUDA empty_cache for safety (m-10 fix)
-            if self.device.type == "cuda" and torch.cuda.is_available():
-                try:
-                    torch.cuda.empty_cache()
-                except Exception as e:
-                    logger.debug(f"Final CUDA empty_cache failed: {e}")
+            _cleanup_device_memory(torch.device(model_device_type))
 
         except Exception as e:
             logger.error(f"Cleanup error for '{self.model_name}': {e}", exc_info=True)
@@ -538,6 +555,7 @@ class VRAMLifecycleManager:
 # ──────────────────────────────────────────────────────────────
 # Convenience Wrapper
 # ──────────────────────────────────────────────────────────────
+
 
 def run_with_vram_cleanup(
     model_loader: Callable,

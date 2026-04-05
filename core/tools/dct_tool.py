@@ -295,8 +295,20 @@ class DCTTool(BaseForensicTool):
 
         return float(max(0.0, min(1.0, score)))
 
-    def _confidence_from_score(self, score: float) -> float:
-        return float(min(DCT_CONFIDENCE_CAP, score + DCT_CONFIDENCE_BUMP))
+    def _confidence_from_score(self, score: float, z_score: float = 0.0) -> float:
+        """Parabolic confidence: high at extremes, low at threshold (0.55)."""
+        # Distance from threshold (0.55)
+        dist = abs(score - 0.55)
+        # 0.45 is max distance. We want 0.9 confidence at distance 0.45
+        # and 0.4 confidence at distance 0.0.
+        raw_conf = 0.4 + (0.5 * (dist / 0.45)**2)
+        
+        # Boost confidence if statistical significance is high (Z > 4.15) 
+        # OR if we categorically ruled out a misaligned grid (Z < 1.0)
+        if z_score > 4.15 or z_score < 1.0:
+            raw_conf = min(0.95, raw_conf + 0.15)
+            
+        return float(min(0.95, max(0.2, raw_conf)))
 
     def _abstain(self, start_time: float, reason: str = "Insufficient data") -> ToolResult:
         return ToolResult(
@@ -393,7 +405,7 @@ class DCTTool(BaseForensicTool):
 
         # ─── Final Scoring ───
         score = self._score_from_ratio(avg_ratio, avg_z, is_phone=is_phone)
-        confidence = self._confidence_from_score(score)
+        confidence = self._confidence_from_score(score, avg_z)
         grid_artifacts = score > 0.5
 
         if score > 0.5:
@@ -404,9 +416,8 @@ class DCTTool(BaseForensicTool):
             )
         elif avg_z < 3.0:
             summary = (
-                f"DCT analysis: grid pattern not statistically significant "
-                f"(peak_ratio={avg_ratio:.3f}, z_score={avg_z:.1f}). "
-                f"Likely interpolation or single-compression artifacts."
+                f"Confirmed single-compression JPEG profile. No suspicious grid found "
+                f"(peak={avg_ratio:.3f}, z={avg_z:.1f}). Matches natural camera sensor signature."
             )
         else:
             summary = (

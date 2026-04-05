@@ -24,7 +24,7 @@ FALLBACK_FPS = 30.0
 # ENSEMBLE WEIGHTS (Corrected to sum exactly to 1.0)
 # =============================================================================
 # AUDIT FIX C-03: Removed duplicate WEIGHT_SIGLIP alias, rebalanced to 1.0
-WEIGHT_UNIVFD = 0.05
+WEIGHT_UNIVFD = 0.09
 WEIGHT_XCEPTION = 0.25
 WEIGHT_SBI = 0.20
 WEIGHT_FREQNET = 0.05
@@ -39,10 +39,21 @@ WEIGHT_C2PA = 0.05
 WEIGHT_SIGLIP = WEIGHT_UNIVFD
 
 # Validation guard
-_ALL_WEIGHTS = [WEIGHT_UNIVFD, WEIGHT_XCEPTION, WEIGHT_SBI, WEIGHT_FREQNET, 
-                WEIGHT_RPPG, WEIGHT_DCT, WEIGHT_GEOMETRY, WEIGHT_ILLUMINATION, 
-                WEIGHT_CORNEAL, WEIGHT_C2PA]
-assert abs(sum(_ALL_WEIGHTS) - 1.0) < 1e-6, f"Weights sum to {sum(_ALL_WEIGHTS)}, must equal 1.0"
+_ALL_WEIGHTS = [
+    WEIGHT_UNIVFD,
+    WEIGHT_XCEPTION,
+    WEIGHT_SBI,
+    WEIGHT_FREQNET,
+    WEIGHT_RPPG,
+    WEIGHT_DCT,
+    WEIGHT_GEOMETRY,
+    WEIGHT_ILLUMINATION,
+    WEIGHT_CORNEAL,
+    WEIGHT_C2PA,
+]
+assert abs(sum(_ALL_WEIGHTS) - 1.0) < 1e-6, (
+    f"Weights sum to {sum(_ALL_WEIGHTS)}, must equal 1.0"
+)
 
 # =============================================================================
 # ENSEMBLE DECISION THRESHOLDS
@@ -57,7 +68,9 @@ ENSEMBLE_INCONCLUSIVE_WEIGHT = 0.50
 BORDERLINE_CONSENSUS_LOW = 0.35
 BORDERLINE_CONSENSUS_HIGH = 0.55
 BORDERLINE_CONSENSUS_BOOST = 1.05  # Reduced from 1.10 to prevent over-penalizing
-GPU_COVERAGE_DEGRADATION_FACTOR = 0.03  # Reduced from 0.05 to limit structural abstention bias
+GPU_COVERAGE_DEGRADATION_FACTOR = (
+    0.03  # Reduced from 0.05 to limit structural abstention bias
+)
 
 # =============================================================================
 # COMPRESSION DISCOUNTS
@@ -73,7 +86,9 @@ SBI_BLIND_SPOT_THRESHOLD = 0.50
 SBI_HIGH_CONFIDENCE_THRESHOLD = 0.80
 SBI_MID_BAND_BASE_WEIGHT = 0.03
 SBI_MID_BAND_CLIP_MULTIPLIER = 0.12
-SBI_SKIP_UNIVFD_THRESHOLD = 0.90  # AUDIT FIX S-09: Raised to prevent evidence suppression
+SBI_SKIP_UNIVFD_THRESHOLD = (
+    0.90  # AUDIT FIX S-09: Raised to prevent evidence suppression
+)
 SBI_FAKE_THRESHOLD = 0.50
 SBI_GRADCAM_REGION_THRESHOLD = 0.40
 SBI_SCALE_115 = 1.15
@@ -114,7 +129,7 @@ RPPG_SNR_THRESHOLD = 3.0
 RPPG_FFT_NFFT = 2048
 RPPG_CARDIAC_BAND_MIN_HZ = 0.7
 RPPG_CARDIAC_BAND_MAX_HZ = 2.5
-RPPG_HAIR_OCCLUSION_VARIANCE = 0.25
+RPPG_HAIR_OCCLUSION_VARIANCE = 250.0
 RPPG_MIN_TEMPORAL_STD = 0.05
 RPPG_COHERENCE_THRESHOLD_HZ = 0.5
 RPPG_HEART_RATE_MIN = 40
@@ -237,13 +252,21 @@ EMA_SMOOTHING_ALPHA = 0.30
 EMA_SMOOTHING_ENABLED = True
 
 # =============================================================================
+# ENCORE CORROBORATION (NEAR-MISS) THRESHOLDS
+# =============================================================================
+ENCORE_NEAR_MISS_THRESHOLD = 0.35
+ENCORE_CORROBORATION_SENSITIVITY = 0.50  # Partial mass for near-miss suspects
+
+# =============================================================================
 # THRESHOLD CONFIG DATACLASS
 # =============================================================================
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class ThresholdConfig:
     """Immutable threshold configuration for EarlyStoppingController."""
+
     real_threshold: float = REAL_THRESHOLD
     fake_threshold: float = FAKE_THRESHOLD
 

@@ -35,9 +35,9 @@ logger = setup_logger(__name__)
 # ──────────────────────────────────────────────────────────────
 PATCH_GRID_SIZE = 3
 PATCH_COVER_RATIO = 0.65
-PATCH_STD_THRESHOLD = 0.08
-PATCH_DAMPENING_FACTOR = 0.45
-PATCH_ACTIVATION_SCORE = 0.35  # Only evaluate consistency if base suspicion is meaningful
+PATCH_STD_THRESHOLD = 0.06
+PATCH_DAMPENING_FACTOR = 0.75
+PATCH_ACTIVATION_SCORE = 0.35
 
 class XceptionTool(BaseForensicTool):
     """Detects face-swap & reenactment deepfakes via XceptionNet + patch variance."""
@@ -179,15 +179,16 @@ class XceptionTool(BaseForensicTool):
             return mean_score, f"Localized artifacts detected (std={std_score:.4f})"
             
         # Low variance branch
-        if mean_score >= 0.55:
+        if mean_score >= 0.43:
             # High suspicion + uniform = sophisticated blend. Preserve score.
             return mean_score, f"High suspicion, uniform processing (std={std_score:.4f}). Dampening bypassed."
         
-        # Low suspicion + uniform = likely ISP artifact. Dampen.
+        # Low suspicion + uniform = likely ISP artifact. Dampen more aggressively.
+        # Use an exponential scale so that very low variance clears the image significantly.
         std_ratio = std_score / PATCH_STD_THRESHOLD
-        dampening = 1.0 - (PATCH_DAMPENING_FACTOR * (1.0 - std_ratio))
+        dampening = 1.0 - (PATCH_DAMPENING_FACTOR * (1.0 - std_ratio**0.5))
         adjusted = mean_score * dampening
-        return adjusted, f"Uniform ISP artifact. Score dampened {dampening:.2f}x ({mean_score:.3f}→{adjusted:.3f})"
+        return adjusted, f"Uniform ISP artifact. Adjusted {mean_score:.3f} to {adjusted:.3f} ({dampening:.2f}x reduction)."
 
     def _calculate_confidence(self, score: float, weights_ok: bool) -> float:
         """Epistemic confidence: probability that the reported score is reliable."""

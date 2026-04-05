@@ -74,6 +74,7 @@ class _LinearProbe(nn.Module):
 class _UnivFDWrapper(nn.Module):
     def __init__(self, backbone, probe):
         super().__init__()
+        # Explicitly assign to register as submodules for .to() and .parameters()
         self.backbone = backbone
         self.probe = probe
 
@@ -130,8 +131,9 @@ class UnivFDTool(BaseForensicTool):
                         probe.fc.weight.copy_(torch.tensor(ckpt["coef"]).clone().detach().reshape(1, -1))
                         probe.fc.bias.copy_(torch.tensor(ckpt["intercept"]).clone().detach().reshape(1))
                 else:
-                    probe.fc.weight.copy_(ckpt.get("weight", ckpt).clone().detach().reshape(1, -1))
-                    probe.fc.bias.copy_(ckpt.get("bias", torch.zeros(1)).clone().detach())
+                    with torch.no_grad():
+                        probe.fc.weight.copy_(ckpt.get("weight", ckpt).clone().detach().reshape(1, -1))
+                        probe.fc.bias.copy_(ckpt.get("bias", torch.zeros(1)).clone().detach())
                 self._weights_loaded_ok = True
             except Exception as e:
                 logger.error(f"Probe load failed: {e}")
@@ -140,9 +142,23 @@ class UnivFDTool(BaseForensicTool):
             logger.warning("Probe not found. Random init.")
             self._weights_loaded_ok = False
 
+        # ──────────────────────────────────────────────────────────────
+        # Device & Precision Awareness (FIX for constant scores on CPU)
+        # ──────────────────────────────────────────────────────────────
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Use FP16 ONLY on GPU; FP16 on certain CPUs yields static/garbage embeddings
+        target_dtype = torch.float16 if device.type == "cuda" else torch.float32
+        
+        backbone = backbone.to(device, dtype=target_dtype)
+        probe = probe.to(device) # Linear probes are lightweight, keep on device
+
         backbone.eval()
         probe.eval()
-        return _UnivFDWrapper(backbone, probe)
+        
+        wrapper = _UnivFDWrapper(backbone, probe)
+        wrapper.to(device) # Cascades to submodules
+        return wrapper
 
     def _crop_to_tensor(self, pil_img: Image.Image, device: torch.device) -> torch.Tensor:
         """CLIP processor handles resize/crop/normalize internally. NO double resizing."""
@@ -150,8 +166,7 @@ class UnivFDTool(BaseForensicTool):
         return inputs.pixel_values.to(device, dtype=torch.float16)
 
     @torch.no_grad()
-    def _score_single(self, wrapper: _UnivFDWrapper, pil_img: Image.Image, device: torch.device) -> float:
-        tensor = self._crop_to_tensor(pil_img, device)
+    def _score_single(self, wrapper: _UnivFDWrapper, tensor: torch.Tensor) -> float:
         outputs = wrapper.backbone(pixel_values=tensor)
         embeds = outputs.image_embeds.float()
         embeds = F.normalize(embeds, p=2, dim=-1)
@@ -213,12 +228,23 @@ class UnivFDTool(BaseForensicTool):
                                   details={"weights_loaded_ok": False, "execution_time": 0.0},
                                   execution_time=0.0, evidence_summary="Model weights missing.")
 
+            # Determine current device/precision from wrapper
             device = next(wrapper.parameters()).device if list(wrapper.parameters()) else torch.device("cpu")
+            dtype = next(wrapper.backbone.parameters()).dtype if list(wrapper.backbone.parameters()) else torch.float32
 
             for pil_crop in pil_crops:
-                logit = self._score_single(wrapper, pil_crop, device)
+                # Preprocess image directly to matching device/dtype
+                inputs = self._processor(images=pil_crop, return_tensors="pt")
+                tensor = inputs.pixel_values.to(device, dtype=dtype)
+                
+                # Inference
+                logit = self._score_single(wrapper, tensor)
+                
                 if self.tta_enabled:
-                    flip_logit = self._score_single(wrapper, pil_crop.transpose(Image.FLIP_LEFT_RIGHT), device)
+                    flip_crop = pil_crop.transpose(Image.FLIP_LEFT_RIGHT)
+                    inputs_f = self._processor(images=flip_crop, return_tensors="pt")
+                    tensor_f = inputs_f.pixel_values.to(device, dtype=dtype)
+                    flip_logit = self._score_single(wrapper, tensor_f)
                     logit = (logit + flip_logit) / 2.0
                 all_logits.append(logit)
 

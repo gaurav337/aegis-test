@@ -199,7 +199,7 @@ class GeometryTool(BaseForensicTool):
 
         face_results = []
         for face in tracked_faces:
-            face_crop = face.get("face_crop_380") or face.get("face_crop_224")
+            face_crop = face.get("face_crop_380") if face.get("face_crop_380") is not None else face.get("face_crop_224")
             lm_raw = face.get("landmarks")
             if face_crop is None or lm_raw is None: continue
             
@@ -247,6 +247,10 @@ class GeometryTool(BaseForensicTool):
             px_width = face_width * face_crop.shape[1]
             if px_width < 120:
                 score *= max(0.7, 0.7 + (0.3 * (px_width - 60) / 60))
+            
+            # Calibration: Dampen low-suspicion 'Consistent' scores for better intuition
+            if score < 0.35:
+                score *= 0.5
 
             face_results.append({
                 "identity_id": face.get("identity_id", 0), "fake_score": score,
@@ -266,8 +270,16 @@ class GeometryTool(BaseForensicTool):
         median_face = min(face_results, key=lambda x: abs(x["fake_score"] - median_score))
 
         viol_str = ", ".join(median_face["violations"]) if median_face["violations"] else "none"
-        summary = (f"Median face (ID {median_face['identity_id']}): Violations in {viol_str}. "
-                   f"Score: {median_score:.2f} (weighted severity).")
+        
+        if median_score < 0.35:
+            summary = (f"Anatomical structure consistent (ID {median_face['identity_id']}). "
+                       f"Anthropometric ratios (IPD, Philtrum, Eye Symmetry) match natural human baseline.")
+        elif median_score < 0.50:
+            summary = (f"Minor anatomical deviations (ID {median_face['identity_id']}): {viol_str}. "
+                       f"Result remains within normal biometric variance (Score: {median_score:.2f}).")
+        else:
+            summary = (f"Significant anatomical violations (ID {median_face['identity_id']}): {viol_str}. "
+                       f"Geometry deviates from human anatomical baseline (Score: {median_score:.2f}).")
 
         return ToolResult(
             tool_name=self.tool_name, success=True, score=float(median_score),

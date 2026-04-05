@@ -177,7 +177,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 statusText = "ABSTAINED";
                             } else {
                                 const realProb = 1.0 - res.score;
-                                const isRisk = realProb < 0.45;
+                                const isRisk = realProb < 0.50;
                                 statusClass = isRisk ? "status-invalid" : "status-valid";
                                 statusText = isRisk ? "SUSPICIOUS" : "CLEAR";
                             }

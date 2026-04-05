@@ -10,23 +10,49 @@ Key Fixes in v5.0:
 5. S-10: Suspicion Overdrive requires tool independence (checks category names).
 6. M-02: Added floating-point epsilon guards for threshold comparisons.
 """
+
 import logging
 from typing import List, Dict, Tuple, Optional, Iterator, Set
 import numpy as np
 from core.data_types import ToolResult
 from utils.thresholds import (
-    WEIGHT_UNIVFD, WEIGHT_SIGLIP, WEIGHT_XCEPTION, WEIGHT_SBI, WEIGHT_FREQNET,
-    WEIGHT_RPPG, WEIGHT_DCT, WEIGHT_GEOMETRY, WEIGHT_ILLUMINATION, WEIGHT_CORNEAL,
-    ENSEMBLE_REAL_THRESHOLD, ENSEMBLE_FAKE_THRESHOLD, ENSEMBLE_INCONCLUSIVE_WEIGHT,
-    DCT_DOUBLE_QUANT_COMPRESSION_THRESHOLD, SBI_COMPRESSION_DISCOUNT, FREQNET_COMPRESSION_DISCOUNT,
-    SBI_BLIND_SPOT_THRESHOLD, SBI_HIGH_CONFIDENCE_THRESHOLD, SBI_MID_BAND_BASE_WEIGHT,
-    SBI_MID_BAND_CLIP_MULTIPLIER, FREQNET_BLIND_SPOT_THRESHOLD,
-    RPPG_PULSE_THRESHOLD_LOW, RPPG_PULSE_THRESHOLD_HIGH, RPPG_NO_PULSE_IMPLIED_PROB,
-    C2PA_VISUAL_CONTRADICTION_THRESHOLD, C2PA_VISUAL_MIN_WEIGHT,
-    CONFLICT_STD_THRESHOLD, SUSPICION_OVERRIDE_THRESHOLD, OVERRIDE_AGREEMENT_THRESHOLD,
-    OVERRIDE_MIN_AGREEMENT, BORDERLINE_CONSENSUS_LOW, BORDERLINE_CONSENSUS_HIGH,
-    BORDERLINE_CONSENSUS_BOOST, GPU_COVERAGE_DEGRADATION_FACTOR,
-    EMA_SMOOTHING_ALPHA, EMA_SMOOTHING_ENABLED
+    WEIGHT_UNIVFD,
+    WEIGHT_XCEPTION,
+    WEIGHT_SBI,
+    WEIGHT_FREQNET,
+    WEIGHT_RPPG,
+    WEIGHT_DCT,
+    WEIGHT_GEOMETRY,
+    WEIGHT_ILLUMINATION,
+    WEIGHT_CORNEAL,
+    ENSEMBLE_REAL_THRESHOLD,
+    ENSEMBLE_FAKE_THRESHOLD,
+    ENSEMBLE_INCONCLUSIVE_WEIGHT,
+    DCT_DOUBLE_QUANT_COMPRESSION_THRESHOLD,
+    SBI_COMPRESSION_DISCOUNT,
+    FREQNET_COMPRESSION_DISCOUNT,
+    SBI_BLIND_SPOT_THRESHOLD,
+    SBI_HIGH_CONFIDENCE_THRESHOLD,
+    SBI_MID_BAND_BASE_WEIGHT,
+    SBI_MID_BAND_CLIP_MULTIPLIER,
+    FREQNET_BLIND_SPOT_THRESHOLD,
+    RPPG_PULSE_THRESHOLD_LOW,
+    RPPG_PULSE_THRESHOLD_HIGH,
+    RPPG_NO_PULSE_IMPLIED_PROB,
+    C2PA_VISUAL_CONTRADICTION_THRESHOLD,
+    C2PA_VISUAL_MIN_WEIGHT,
+    CONFLICT_STD_THRESHOLD,
+    SUSPICION_OVERRIDE_THRESHOLD,
+    OVERRIDE_AGREEMENT_THRESHOLD,
+    OVERRIDE_MIN_AGREEMENT,
+    BORDERLINE_CONSENSUS_LOW,
+    BORDERLINE_CONSENSUS_HIGH,
+    BORDERLINE_CONSENSUS_BOOST,
+    GPU_COVERAGE_DEGRADATION_FACTOR,
+    EMA_SMOOTHING_ALPHA,
+    EMA_SMOOTHING_ENABLED,
+    ENCORE_NEAR_MISS_THRESHOLD,
+    ENCORE_CORROBORATION_SENSITIVITY,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,8 +62,6 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────
 
 TOOL_NAME_MAP = {
-    "run_clip_adapter": "run_siglip_adapter",
-    "run_siglip_adapter": "run_siglip_adapter",
     "run_univfd": "run_univfd",
     "run_xception": "run_xception",
     "run_sbi": "run_sbi",
@@ -52,7 +76,6 @@ TOOL_NAME_MAP = {
 
 # AUDIT FIX C-03: Ensure weights sum to 1.0 dynamically if config drifts
 _RAW_WEIGHT_MAP = {
-    "run_siglip_adapter": WEIGHT_SIGLIP,
     "run_univfd": WEIGHT_UNIVFD,
     "run_xception": WEIGHT_XCEPTION,
     "run_sbi": WEIGHT_SBI,
@@ -66,17 +89,23 @@ _RAW_WEIGHT_MAP = {
 
 # Categories for Independence Check (S-10)
 _INDEPENDENCE_GROUPS = {
-    "generation_detectors": {"run_univfd", "run_siglip_adapter", "run_freqnet"},
+    "generation_detectors": {"run_univfd", "run_freqnet"},
     "swap_detectors": {"run_xception", "run_sbi"},
     "physical_consistency": {"run_corneal", "run_geometry", "run_illumination"},
     "provenance": {"check_c2pa"},
     "compression": {"run_dct"},
 }
 
-GPU_SPECIALISTS = {"run_univfd", "run_xception", "run_sbi", "run_freqnet", "run_siglip_adapter"}
+GPU_SPECIALISTS = {
+    "run_univfd",
+    "run_xception",
+    "run_sbi",
+    "run_freqnet",
+}
 
 # Structural abstainers (tools that naturally don't run on all media)
-_STRUCTURAL_ABSTAINERS = {"run_rppg", "run_dct"} 
+_STRUCTURAL_ABSTAINERS = {"run_rppg", "run_dct"}
+
 
 def _normalize_weights(weight_map: Dict[str, float]) -> Dict[str, float]:
     """Renormalize weights to sum to 1.0 to prevent score inflation."""
@@ -86,7 +115,9 @@ def _normalize_weights(weight_map: Dict[str, float]) -> Dict[str, float]:
         return {k: v / total for k, v in weight_map.items()}
     return weight_map
 
+
 WEIGHT_MAP = _normalize_weights(_RAW_WEIGHT_MAP)
+
 
 def _get_base_schema() -> Dict:
     return {
@@ -102,8 +133,10 @@ def _get_base_schema() -> Dict:
         "has_conflict": False,
     }
 
+
 def _normalize_tool_name(name: str) -> str:
     return TOOL_NAME_MAP.get(name, name)
+
 
 def _deduplicate_results(tool_results: List[ToolResult]) -> List[ToolResult]:
     seen: Dict[str, ToolResult] = {}
@@ -114,46 +147,60 @@ def _deduplicate_results(tool_results: List[ToolResult]) -> List[ToolResult]:
             seen[tool_name] = r
     return list(seen.values())
 
+
 def _safe_get_details(result: ToolResult, key: str, default=None):
     return (result.details or {}).get(key, default)
 
-def _extract_context(tool_results: List[ToolResult], flags: List[str] = None) -> Dict[str, float]:
+
+def _extract_context(
+    tool_results: List[ToolResult], flags: List[str] = None
+) -> Dict[str, float]:
     context = {
         "dct_peak_ratio": 0.0,
-        "siglip_score": 0.5,
-        "siglip_available": False,
+        "univfd_score": 0.5,
+        "univfd_available": False,
         "compression_detected": "COMPRESSION" in (flags or []),
         "is_grayscale": "GRAYSCALE" in (flags or []),
         "heavy_blur": "HEAVY_BLUR" in (flags or []),
-        "clipped_hist": "CLIPPED_BLACK" in (flags or []) or "CLIPPED_WHITE" in (flags or []),
+        "clipped_hist": "CLIPPED_BLACK" in (flags or [])
+        or "CLIPPED_WHITE" in (flags or []),
     }
     for result in tool_results:
-        if not result.success: continue
+        if not result.success:
+            continue
         tool_name = _normalize_tool_name(result.tool_name)
         if tool_name == "run_dct":
             context["dct_peak_ratio"] = _safe_get_details(result, "peak_ratio", 0.0)
             if context["dct_peak_ratio"] > DCT_DOUBLE_QUANT_COMPRESSION_THRESHOLD:
                 context["compression_detected"] = True
-        elif tool_name in ["run_univfd", "run_siglip_adapter"]:
-            context["siglip_score"] = result.fake_score
-            context["siglip_available"] = True
+        elif tool_name == "run_univfd":
+            context["univfd_score"] = result.fake_score
+            context["univfd_available"] = True
     return context
 
+
 def _compute_conflict_std(implied_probs: List[float]) -> float:
-    if len(implied_probs) < 2: return 0.0
+    if len(implied_probs) < 2:
+        return 0.0
     mean = sum(implied_probs) / len(implied_probs)
     variance = sum((p - mean) ** 2 for p in implied_probs) / len(implied_probs)
     return variance**0.5
+
 
 # ──────────────────────────────────────────────────────────────
 # Routing Logic
 # ──────────────────────────────────────────────────────────────
 
-def _route(result: ToolResult, context: Dict[str, float], use_confidence_weighting: bool = False) -> Tuple[float, float, bool]:
+
+def _route(
+    result: ToolResult,
+    context: Dict[str, float],
+    use_confidence_weighting: bool = False,
+) -> Tuple[float, float, bool]:
     """
     Routes a tool result to a contribution and weight.
     Returns (contribution, effective_weight, is_abstention).
-    
+
     AUDIT FIX C-05: If confidence is 0.0 (structural abstention), return abstention=True.
     """
     if not result.success or getattr(result, "error_msg", None):
@@ -173,7 +220,11 @@ def _route(result: ToolResult, context: Dict[str, float], use_confidence_weighti
         return (0.0, 0.0, True)
 
     if tool_name == "check_c2pa":
-        return (0.0, 0.0, False) # C2PA is handled separately, returns 0 contribution here
+        return (
+            0.0,
+            0.0,
+            False,
+        )  # C2PA is handled separately, returns 0 contribution here
 
     # --- rPPG ---
     if tool_name == "run_rppg":
@@ -182,16 +233,18 @@ def _route(result: ToolResult, context: Dict[str, float], use_confidence_weighti
         elif score > RPPG_PULSE_THRESHOLD_HIGH:
             contribution, weight = WEIGHT_RPPG * RPPG_NO_PULSE_IMPLIED_PROB, WEIGHT_RPPG
         else:
-            return (0.0, 0.0, True) # Borderline -> Abstain
+            return (0.0, 0.0, True)  # Borderline -> Abstain
         if use_confidence_weighting:
             weight *= result.confidence
             contribution = (contribution / (WEIGHT_RPPG + 1e-10)) * weight
         return (contribution, weight, False)
 
-    # --- UnivFD / Xception / SigLIP ---
-    if tool_name in ("run_univfd", "run_xception", "run_siglip_adapter"):
+    # --- UnivFD / Xception ---
+    if tool_name in ("run_univfd", "run_xception"):
         weight = base_weight
-        if tool_name == "run_xception" and (context.get("is_grayscale") or context.get("compression_detected")):
+        if tool_name == "run_xception" and (
+            context.get("is_grayscale") or context.get("compression_detected")
+        ):
             weight *= 1.25
         contribution = score * weight
         if use_confidence_weighting:
@@ -203,18 +256,28 @@ def _route(result: ToolResult, context: Dict[str, float], use_confidence_weighti
     if tool_name == "run_sbi":
         if score >= SBI_HIGH_CONFIDENCE_THRESHOLD:
             sbi_weight = WEIGHT_SBI
-            if context.get("compression_detected"): sbi_weight *= SBI_COMPRESSION_DISCOUNT
-            if context.get("is_grayscale"): sbi_weight *= 0.1
+            if context.get("compression_detected"):
+                sbi_weight *= SBI_COMPRESSION_DISCOUNT
+            if context.get("is_grayscale"):
+                sbi_weight *= 0.1
             contribution, weight = score * sbi_weight, sbi_weight
             if use_confidence_weighting:
                 weight *= result.confidence
                 contribution = (contribution / (sbi_weight + 1e-10)) * weight
             return (contribution, weight, False)
 
-        clip_score = context.get("siglip_score", 0.5) if context.get("siglip_available", False) else 0.5
-        sbi_weight = SBI_MID_BAND_BASE_WEIGHT + (SBI_MID_BAND_CLIP_MULTIPLIER * clip_score)
-        if context.get("compression_detected"): sbi_weight *= SBI_COMPRESSION_DISCOUNT
-        if context.get("is_grayscale") or context.get("heavy_blur"): sbi_weight *= 0.1
+        clip_score = (
+            context.get("univfd_score", 0.5)
+            if context.get("univfd_available", False)
+            else 0.5
+        )
+        sbi_weight = SBI_MID_BAND_BASE_WEIGHT + (
+            SBI_MID_BAND_CLIP_MULTIPLIER * clip_score
+        )
+        if context.get("compression_detected"):
+            sbi_weight *= SBI_COMPRESSION_DISCOUNT
+        if context.get("is_grayscale") or context.get("heavy_blur"):
+            sbi_weight *= 0.1
         contribution, weight = score * sbi_weight, sbi_weight
         if use_confidence_weighting:
             weight *= result.confidence
@@ -237,17 +300,25 @@ def _route(result: ToolResult, context: Dict[str, float], use_confidence_weighti
     # --- Corneal ---
     if tool_name == "run_corneal":
         from utils.thresholds import CORNEAL_BLIND_SPOT_THRESHOLD
-        if score < CORNEAL_BLIND_SPOT_THRESHOLD: return (0.0, 0.0, True)
+
+        if score < CORNEAL_BLIND_SPOT_THRESHOLD:
+            return (0.0, 0.0, True)
 
     # --- Illumination ---
     if tool_name == "run_illumination":
         from utils.thresholds import ILLUMINATION_DIFFUSE_THRESHOLD
-        if score < ILLUMINATION_DIFFUSE_THRESHOLD: return (0.0, 0.0, True)
+
+        if score < ILLUMINATION_DIFFUSE_THRESHOLD:
+            return (0.0, 0.0, True)
 
     # --- Geometry ---
     if tool_name == "run_geometry":
         weight = base_weight
-        if context.get("is_grayscale") or context.get("compression_detected") or context.get("heavy_blur"):
+        if (
+            context.get("is_grayscale")
+            or context.get("compression_detected")
+            or context.get("heavy_blur")
+        ):
             weight *= 1.5
         contribution = score * weight
         if use_confidence_weighting:
@@ -261,9 +332,11 @@ def _route(result: ToolResult, context: Dict[str, float], use_confidence_weighti
         contribution = score * weight
     return (contribution, weight, False)
 
+
 # ──────────────────────────────────────────────────────────────
 # Main Aggregation
 # ──────────────────────────────────────────────────────────────
+
 
 def calculate_ensemble_score(
     tool_results: List[ToolResult],
@@ -271,23 +344,40 @@ def calculate_ensemble_score(
     use_confidence_weighting: bool = False,
     flags: List[str] = None,
 ) -> Dict:
-    
+
     tool_results = _deduplicate_results(tool_results)
     context = _extract_context(tool_results, flags)
 
     # 1. C2PA Override Check (AUDIT FIX S-03)
     # Only override if C2PA is valid AND Visuals agree it's REAL.
-    c2pa_result = next((r for r in tool_results if _normalize_tool_name(r.tool_name) == "check_c2pa"), None)
-    
-    if (c2pa_result and c2pa_result.success and _safe_get_details(c2pa_result, "c2pa_verified", False)):
+    c2pa_result = next(
+        (r for r in tool_results if _normalize_tool_name(r.tool_name) == "check_c2pa"),
+        None,
+    )
+
+    if (
+        c2pa_result
+        and c2pa_result.success
+        and _safe_get_details(c2pa_result, "c2pa_verified", False)
+    ):
         # Collect visual tools that actually contributed (confidence > 0)
         visual_tools_run = [
-            r for r in tool_results
-            if _normalize_tool_name(r.tool_name) in GPU_SPECIALISTS | {"run_geometry", "run_illumination"}
-            and r.success and r.confidence > 0.1
+            r
+            for r in tool_results
+            if _normalize_tool_name(r.tool_name)
+            in GPU_SPECIALISTS | {"run_geometry", "run_illumination"}
+            and r.success
+            and r.confidence > 0.1
         ]
 
-        if len(visual_tools_run) >= 1 and sum(WEIGHT_MAP.get(_normalize_tool_name(r.tool_name), 0) for r in visual_tools_run) > C2PA_VISUAL_MIN_WEIGHT:
+        if (
+            len(visual_tools_run) >= 1
+            and sum(
+                WEIGHT_MAP.get(_normalize_tool_name(r.tool_name), 0)
+                for r in visual_tools_run
+            )
+            > C2PA_VISUAL_MIN_WEIGHT
+        ):
             # Calculate visual average
             vis_contribs, vis_weights = [], []
             for r in visual_tools_run:
@@ -295,21 +385,37 @@ def calculate_ensemble_score(
                 if w > 1e-9:
                     vis_contribs.append(c)
                     vis_weights.append(w)
-            
-            visual_avg = sum(vis_contribs) / sum(vis_weights) if sum(vis_weights) > 0 else 0.0
-            
+
+            visual_avg = (
+                sum(vis_contribs) / sum(vis_weights) if sum(vis_weights) > 0 else 0.0
+            )
+
             # Decision Logic:
             if visual_avg < 0.35:
                 # Visuals agree: REAL -> Override to REAL
-                return {**_get_base_schema(), "is_c2pa_override": True, "override_reason": "C2PA verified, visuals agree"}
+                return {
+                    **_get_base_schema(),
+                    "is_c2pa_override": True,
+                    "override_reason": "C2PA verified, visuals agree",
+                }
             elif visual_avg > C2PA_VISUAL_CONTRADICTION_THRESHOLD:
                 # Visuals scream FAKE -> Flag Spoofing
-                logger.warning("C2PA Verified but Visuals detect strong artifacts (Avg: %.2f). Possible Spoofing.", visual_avg)
-                return {**_get_base_schema(), "is_c2pa_override": False, "override_reason": "Visual contradiction detected", "is_spoofing_warning": True}
+                logger.warning(
+                    "C2PA Verified but Visuals detect strong artifacts (Avg: %.2f). Possible Spoofing.",
+                    visual_avg,
+                )
+                return {
+                    **_get_base_schema(),
+                    "is_c2pa_override": False,
+                    "override_reason": "Visual contradiction detected",
+                    "is_spoofing_warning": True,
+                }
             # Else: Ambiguous -> Do not override. Let ensemble decide.
         else:
             # No visual tools ran -> Do not override (blind trust risk)
-            logger.info("C2PA valid but no visual tools ran. Proceeding with ensemble (no override).")
+            logger.info(
+                "C2PA valid but no visual tools ran. Proceeding with ensemble (no override)."
+            )
 
     # 2. Route Tools
     total_contribution, total_weight = 0.0, 0.0
@@ -320,13 +426,27 @@ def calculate_ensemble_score(
     for result in tool_results:
         tool_name = _normalize_tool_name(result.tool_name)
         if not result.success:
-            abstentions.append({"tool_name": tool_name, "fake_score": result.fake_score, "reason": "tool_failed"})
+            abstentions.append(
+                {
+                    "tool_name": tool_name,
+                    "fake_score": result.fake_score,
+                    "reason": "tool_failed",
+                }
+            )
             continue
 
-        contribution, effective_weight, is_abstention = _route(result, context, use_confidence_weighting)
+        contribution, effective_weight, is_abstention = _route(
+            result, context, use_confidence_weighting
+        )
 
         if is_abstention:
-            abstentions.append({"tool_name": tool_name, "fake_score": result.fake_score, "reason": "abstain_or_failure"})
+            abstentions.append(
+                {
+                    "tool_name": tool_name,
+                    "fake_score": result.fake_score,
+                    "reason": "abstain_or_failure",
+                }
+            )
             # AUDIT FIX C-05: Track GPU abstentions ONLY if not structural
             # We infer structural from confidence=0.0 (which _route returns as abstention)
             # or by checking if it's a tool known to be structural and score=0.
@@ -356,7 +476,12 @@ def calculate_ensemble_score(
             }
 
     if total_weight < 1e-9:
-        return {**_get_base_schema(), "ensemble_score": 0.5, "is_inconclusive": True, "abstentions": abstentions}
+        return {
+            **_get_base_schema(),
+            "ensemble_score": 0.5,
+            "is_inconclusive": True,
+            "abstentions": abstentions,
+        }
 
     base_ensemble = total_contribution / total_weight
 
@@ -364,52 +489,70 @@ def calculate_ensemble_score(
     max_gpu_prob = max(gpu_specialist_probs) if gpu_specialist_probs else 0.0
     highest_suspicion = max(implied_probs) if implied_probs else 0.0
 
-    # PRONG 1: Suspicion Overdrive (Audit Fix S-10 - Independence Check)
-    # Only trigger if high-scoring tools span different independence groups
-    gpu_probs_map = {}
-    for result in tool_results:
-        tn = _normalize_tool_name(result.tool_name)
-        if tn in GPU_SPECIALISTS and result.success:
-            gpu_probs_map[tn] = result.fake_score
-
-    high_confidence_tools = [n for n, p in gpu_probs_map.items() if p > OVERRIDE_AGREEMENT_THRESHOLD]
+    # PRONG 1: Specialized Hunter Override (Asymmetric Noisy-OR Corroboration)
+    # GPU tools are specialized anomaly detectors. A low score means "no anomaly found in my domain",
+    # NOT "provably real". Therefore, we extract the 'suspicion mass' from each tool
+    # and combine them using Noisy-OR (Probability of Union). 
     
-    # Check Independence
-    if len(high_confidence_tools) >= OVERRIDE_MIN_AGREEMENT:
-        active_groups = set()
-        for t_name in high_confidence_tools:
-            for group, members in _INDEPENDENCE_GROUPS.items():
-                if t_name in members:
-                    active_groups.add(group)
+    # AUDIT FIX S-11: Include 'Near-Miss' suspects (0.35-0.50) with partial mass.
+    suspicion_masses = []
+    for p in gpu_specialist_probs:
+        if p > 0.5:
+            # Full Suspect
+            suspicion_masses.append(p)
+        elif p >= ENCORE_NEAR_MISS_THRESHOLD:
+            # Near-Miss: Contributes half of its suspicion above the threshold
+            # Example: 0.40 suspect with 0.35 threshold -> (0.40-0.35)*0.5 + 0.5 = 0.525 mask
+            # For simplicity, we just use a weighted blend to push it slightly over 0.5
+            mass = 0.5 + (p - ENCORE_NEAR_MISS_THRESHOLD) * ENCORE_CORROBORATION_SENSITIVITY
+            suspicion_masses.append(mass)
+
+    if suspicion_masses:
+        # Calculate Probability of Union for independent anomaly detectors
+        # P_union = 1 - ( (1-p1) * (1-p2) * ... )
+        combined_miss_chance = 1.0
+        for p in suspicion_masses:
+            combined_miss_chance *= (1.0 - p)
+        corroborated_score = 1.0 - combined_miss_chance
         
-        # Requires agreement from at least 2 independent categories (e.g. UnivFD + Xception)
-        # or 3 tools in same category (if we relax, but 2 groups is safer)
-        if len(active_groups) >= 2 or len(high_confidence_tools) >= 3:
-            fake_score = sum(gpu_probs_map[t] for t in high_confidence_tools) / len(high_confidence_tools)
-            logger.info(f"Suspicion Overdrive: {len(high_confidence_tools)} tools in {active_groups} agree. Score: {fake_score}")
+        # Ensure it perfectly overrides the base
+        fake_score = max(corroborated_score, max_gpu_prob, base_ensemble)
+        
+        if corroborated_score > max_gpu_prob + 0.01:
+            logger.info(
+                f"Hunter Corroboration Boost: Corroborated {len(suspicion_masses)} suspects. Amplified max {max_gpu_prob:.4f} -> {fake_score:.4f}."
+            )
         else:
-            fake_score = base_ensemble
+            logger.info(
+                f"Specialized Hunter Override: GPU tool flagged fake score {fake_score:.4f}. Overriding base {base_ensemble:.4f}."
+            )
     else:
         fake_score = base_ensemble
 
     # PRONG 2: Borderline Consensus (Audit Fix S-02)
     # If tools cluster near 0.5, do NOT boost to fake. Mark inconclusive.
-    borderline_gpu = [p for p in gpu_specialist_probs if BORDERLINE_CONSENSUS_LOW <= p <= BORDERLINE_CONSENSUS_HIGH]
+    borderline_gpu = [
+        p
+        for p in gpu_specialist_probs
+        if BORDERLINE_CONSENSUS_LOW <= p <= BORDERLINE_CONSENSUS_HIGH
+    ]
     if len(borderline_gpu) >= 2:
         logger.info(f"Borderline Consensus: {len(borderline_gpu)} GPU tools uncertain.")
         # Optional: Slight confidence reduction or just let it be.
         # For safety, if base is borderline, we don't push it to Fake.
         if fake_score >= 0.40 and fake_score <= 0.60:
-             # Ensure we don't falsely trigger fake due to noise
-             pass 
+            # Ensure we don't falsely trigger fake due to noise
+            pass
 
     # PRONG 3: GPU Coverage Degradation (Audit Fix C-05)
     # Only penalize if tools ABSTAINED EVIDENTIALLY (ran but failed/uncertain).
     # Structural abstentions (rPPG on image) are ignored here.
     gpu_degradation_boost = 1.0
     if len(gpu_abstained_tools) > 0:
-        gpu_degradation_boost = 1.0 + (GPU_COVERAGE_DEGRADATION_FACTOR * len(gpu_abstained_tools))
-    
+        gpu_degradation_boost = 1.0 + (
+            GPU_COVERAGE_DEGRADATION_FACTOR * len(gpu_abstained_tools)
+        )
+
     candidate_score = max(base_ensemble, fake_score)
     degraded_score = candidate_score * gpu_degradation_boost
 
@@ -423,12 +566,13 @@ def calculate_ensemble_score(
     ensemble_score = round(1.0 - final_fake_score, 4)
 
     conflict_std = _compute_conflict_std(implied_probs)
-    
+
     output = {
         **_get_base_schema(),
         "ensemble_score": ensemble_score,
         "fake_score": final_fake_score,
-        "is_inconclusive": total_weight < ENSEMBLE_INCONCLUSIVE_WEIGHT or (conflict_std > 0.25),
+        "is_inconclusive": total_weight < ENSEMBLE_INCONCLUSIVE_WEIGHT
+        or (conflict_std > 0.25),
         "total_weight": round(total_weight, 4),
         "tools_ran": tools_ran,
         "abstentions": abstentions,
@@ -441,7 +585,13 @@ def calculate_ensemble_score(
         output["context"] = context
     return output
 
-def stream_ensemble_score(frame_results_iterator, return_metadata=False, apply_ema_smoothing=True, ema_alpha=None):
+
+def stream_ensemble_score(
+    frame_results_iterator,
+    return_metadata=False,
+    apply_ema_smoothing=True,
+    ema_alpha=None,
+):
     subject_states: Dict[str, float] = {}
     ema_alpha = ema_alpha if ema_alpha is not None else EMA_SMOOTHING_ALPHA
     for subject_id, frame_results in frame_results_iterator:
@@ -455,20 +605,26 @@ def stream_ensemble_score(frame_results_iterator, return_metadata=False, apply_e
                 if prev_score is None:
                     subject_states[subject_id] = current_raw
                 else:
-                    smoothed = (ema_alpha * current_raw) + ((1.0 - ema_alpha) * prev_score)
+                    smoothed = (ema_alpha * current_raw) + (
+                        (1.0 - ema_alpha) * prev_score
+                    )
                     output["ensemble_score"] = round(smoothed, 4)
                     subject_states[subject_id] = smoothed
         yield subject_id, output
 
+
 class EnsembleAggregator:
     def __init__(self):
         self.tool_results: Dict[str, ToolResult] = {}
+
     def add_result(self, result: ToolResult):
         self.tool_results[result.tool_name] = result
+
     def get_final_score(self) -> float:
         flags = getattr(self, "flags", [])
         res = calculate_ensemble_score(list(self.tool_results.values()), flags=flags)
         return float(res.get("ensemble_score", 0.0))
+
     def get_verdict(self) -> str:
         score = self.get_final_score()
         return "FAKE" if score <= ENSEMBLE_REAL_THRESHOLD else "REAL"
