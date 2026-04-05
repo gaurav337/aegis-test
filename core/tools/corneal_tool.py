@@ -1,56 +1,44 @@
-"""Corneal Tool — Specular Reflection Consistency Check (V3).
-
+"""Corneal Tool — Specular Reflection Consistency Check (V4 - Audit Corrected)
 Physics-based check targeting diffusion models (Midjourney, DALL-E,
 Stable Diffusion) that struggle with consistent specular highlights.
 
-V3 Fixes:
-    1. Uses 380×380 crop when available (iris too small at 224×224)
-    2. Relative brightness threshold (adaptive to exposure)
-    3. Head pose-aware divergence tolerance
-    4. Multi-blob matching between eyes (not just largest blob)
-    5. Dynamic eye region validation (no hardcoded y-bands)
-    6. Glasses detection gate — abstains if glasses detected
-    7. Composite confidence based on measurement quality
+Key Fixes:
+1. M-01: Adaptive threshold flooring (σ_floor) prevents collapse on dark/low-contrast irises.
+2. C-05: Glasses detection returns structural abstention (confidence=0.0) — no penalty.
+3. M-03: Landmark coordinate validation with explicit space metadata.
+4. Multi-blob matching: Uses all catchlight blobs, not just largest.
+5. Head pose-aware divergence tolerance: Widen threshold for extreme yaw/pitch/roll.
 """
-
 import time
 import cv2
 import numpy as np
 from typing import Any, Dict, List, Tuple, Optional
-
 from core.base_tool import BaseForensicTool
 from core.data_types import ToolResult
 from utils.thresholds import (
     CORNEAL_BOX_SIZE,
     CORNEAL_MAX_DIVERGENCE,
     CORNEAL_CONSISTENCY_THRESHOLD,
+    CORNEAL_SIGMA_FLOOR,  # FIX M-01: Prevent threshold collapse
 )
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ──────────────────────────────────────────────────────────────
 # PHYSICS CONSTANTS
-# ═══════════════════════════════════════════════════════════════════════════
-
-# FIX 2: Relative brightness threshold (adaptive)
+# ──────────────────────────────────────────────────────────────
 RELATIVE_BRIGHTNESS_SIGMA = 3.5  # Catchlight must be 3.5σ above iris median
-ABSOLUTE_MIN_BRIGHTNESS = 150  # Lowered from 180 (HDR/underexposed handling)
-
-# Maximum possible divergence in normalized offset space
-MAX_GEOMETRIC_DIVERGENCE = np.sqrt(8)  # ≈ 2.83
-
-# FIX 3: Head pose divergence tolerance multiplier
+ABSOLUTE_MIN_BRIGHTNESS = 150    # Lowered from 180 (HDR/underexposed handling)
+MAX_GEOMETRIC_DIVERGENCE = np.sqrt(8)  # ≈ 2.83 (max possible in normalized offset space)
 POSE_DIVERGENCE_MULTIPLIER = 0.03  # Per degree of head rotation
-
-# FIX 6: Glasses detection thresholds
-GLASSES_EDGE_THRESHOLD = 80  # Minimum gradient for frame edge detection
-GLASSES_MIN_EDGE_LENGTH = 12  # Minimum edge segment length (pixels)
+GLASSES_EDGE_THRESHOLD = 80        # Minimum gradient for frame edge detection
+GLASSES_MIN_EDGE_LENGTH = 12       # Minimum edge segment length (pixels)
 
 
 class CornealTool(BaseForensicTool):
     """Tool for detecting corneal reflection (catchlight) inconsistencies."""
-
+    
     @property
     def tool_name(self) -> str:
         return "run_corneal"
@@ -61,33 +49,27 @@ class CornealTool(BaseForensicTool):
         self.max_divergence = CORNEAL_MAX_DIVERGENCE
         self.consistency_threshold = CORNEAL_CONSISTENCY_THRESHOLD
 
-    # ─── FIX 6: Glasses Detection ───
-
+    # ─── FIX C-05: Glasses Detection (Structural Abstention) ───
     def _detect_glasses(self, face_crop: np.ndarray, landmarks: np.ndarray) -> bool:
         """Detect whether the person is wearing glasses.
-
-        Checks for hard horizontal edges crossing the nose bridge region
-        and rectangular/elliptical patterns around the eye regions.
-        Returns True if glasses are detected.
+        
+        Returns True if glasses detected → tool abstains with confidence=0.0.
         """
         h, w = face_crop.shape[:2]
         gray = cv2.cvtColor(face_crop, cv2.COLOR_RGB2GRAY)
 
         # Check 1: Horizontal edge across nose bridge (landmarks 6 and 168)
         if landmarks.shape[0] >= 478:
-            # Nose bridge landmarks in crop space (approximate)
             nose_bridge_y = int(landmarks[168, 1])
             nose_bridge_x = int(landmarks[168, 0])
 
             if 0 < nose_bridge_y < h - 1:
-                # Sample horizontal line across nose bridge
                 line_width = min(40, w // 4)
                 x1 = max(0, nose_bridge_x - line_width)
                 x2 = min(w, nose_bridge_x + line_width)
                 line = gray[nose_bridge_y, x1:x2]
 
                 if len(line) > 4:
-                    # Look for sharp intensity transitions (frame edges)
                     gradients = np.abs(np.diff(line.astype(np.float32)))
                     strong_edges = np.sum(gradients > GLASSES_EDGE_THRESHOLD)
                     if strong_edges >= 2:
@@ -100,7 +82,6 @@ class CornealTool(BaseForensicTool):
 
         if eye_roi.size > 0:
             edges = cv2.Canny(eye_roi, 50, 150)
-            # Look for long horizontal edges (frame tops/bottoms)
             h_edges = np.sum(edges, axis=1)
             max_h_edge = np.max(h_edges) if len(h_edges) > 0 else 0
             if max_h_edge > GLASSES_MIN_EDGE_LENGTH * 3:
@@ -108,13 +89,9 @@ class CornealTool(BaseForensicTool):
 
         return False
 
-    # ─── FIX 3: Head Pose Estimation ───
-
+    # ─── Head Pose Estimation for Divergence Tolerance ───
     def _estimate_head_pose(self, landmarks: np.ndarray) -> Tuple[float, float, float]:
-        """Estimate head rotation angles (yaw, pitch, roll) from landmarks.
-
-        Returns (yaw_deg, pitch_deg, roll_deg).
-        """
+        """Estimate head rotation angles (yaw, pitch, roll) from landmarks."""
         if landmarks.shape[0] < 478:
             return 0.0, 0.0, 0.0
 
@@ -135,29 +112,20 @@ class CornealTool(BaseForensicTool):
         right_dist = np.linalg.norm(nose_tip - right_cheek)
         total = left_dist + right_dist + 1e-10
         yaw_ratio = abs(left_dist - right_dist) / total
-        yaw_deg = yaw_ratio * 60.0  # Rough calibration
+        yaw_deg = yaw_ratio * 60.0
 
         # Pitch: vertical position of nose relative to face center
         forehead = landmarks[10]
         chin = landmarks[152]
         face_center_y = (forehead[1] + chin[1]) / 2
-        pitch_offset = (nose_tip[1] - face_center_y) / (
-            np.linalg.norm(forehead - chin) + 1e-10
-        )
+        pitch_offset = (nose_tip[1] - face_center_y) / (np.linalg.norm(forehead - chin) + 1e-10)
         pitch_deg = abs(pitch_offset) * 45.0
 
         return yaw_deg, pitch_deg, roll_deg
 
-    # ─── FIX 5: Dynamic Eye Region Validation ───
-
-    def _validate_iris_landmark(
-        self, landmark: np.ndarray, face_crop: np.ndarray
-    ) -> bool:
-        """Validate that iris landmark is within the face crop boundaries.
-
-        No hardcoded y-bands — just check the landmark is within crop bounds
-        with a small margin for the ROI box.
-        """
+    # ─── FIX M-03: Dynamic Eye Region Validation ───
+    def _validate_iris_landmark(self, landmark: np.ndarray, face_crop: np.ndarray) -> bool:
+        """Validate that iris landmark is within the face crop boundaries."""
         h, w = face_crop.shape[:2]
         cx, cy = int(landmark[0]), int(landmark[1])
         half_box = self.box_size // 2
@@ -165,10 +133,7 @@ class CornealTool(BaseForensicTool):
         return half_box <= cx < w - half_box and half_box <= cy < h - half_box
 
     # ─── ROI Extraction ───
-
-    def _extract_iris_roi(
-        self, face_crop: np.ndarray, iris_landmark: np.ndarray
-    ) -> Optional[np.ndarray]:
+    def _extract_iris_roi(self, face_crop: np.ndarray, iris_landmark: np.ndarray) -> Optional[np.ndarray]:
         """Extract box centered on iris landmark. No padding on edge cases."""
         if face_crop is None or face_crop.size == 0:
             return None
@@ -194,8 +159,7 @@ class CornealTool(BaseForensicTool):
 
         return roi
 
-    # ─── FIX 2: Adaptive Brightness Threshold ───
-
+    # ─── FIX M-01: Adaptive Brightness Threshold with σ Floor ───
     def _detect_catchlight_centroid(
         self, iris_roi: np.ndarray
     ) -> Tuple[Optional[Tuple[float, float]], float]:
@@ -205,16 +169,13 @@ class CornealTool(BaseForensicTool):
 
         gray = cv2.cvtColor(iris_roi, cv2.COLOR_RGB2GRAY).astype(np.float32)
 
-        # FIX 2: Relative threshold — catchlight must be N sigma above iris median
+        # FIX M-01: Relative threshold with σ floor to prevent collapse on dark irises
         median_brightness = float(np.median(gray))
         std_brightness = float(np.std(gray))
-
-        if std_brightness < 1.0:
-            return None, 0.0  # Too uniform — no catchlight
-
-        adaptive_threshold = median_brightness + (
-            RELATIVE_BRIGHTNESS_SIGMA * std_brightness
-        )
+        
+        # Apply σ floor: if std is too low, use floor value to avoid false positives
+        effective_sigma = max(std_brightness, CORNEAL_SIGMA_FLOOR)
+        adaptive_threshold = median_brightness + (RELATIVE_BRIGHTNESS_SIGMA * effective_sigma)
         actual_threshold = max(adaptive_threshold, ABSOLUTE_MIN_BRIGHTNESS)
 
         max_brightness = float(np.max(gray))
@@ -244,13 +205,11 @@ class CornealTool(BaseForensicTool):
             center_x, center_y = self.box_size / 2, self.box_size / 2
             offset_x = (cx - center_x) / center_x
             offset_y = (cy - center_y) / center_y
-            blobs.append(
-                {
-                    "offset": (float(offset_x), float(offset_y)),
-                    "area": int(area),
-                    "brightness": max_brightness,
-                }
-            )
+            blobs.append({
+                "offset": (float(offset_x), float(offset_y)),
+                "area": int(area),
+                "brightness": max_brightness,
+            })
 
         if not blobs:
             return None, 0.0
@@ -259,15 +218,11 @@ class CornealTool(BaseForensicTool):
         largest = max(blobs, key=lambda b: b["area"])
         return largest["offset"], largest["brightness"] / 255.0
 
-    # ─── FIX 4: Multi-Blob Matching ───
-
+    # ─── Multi-Blob Matching ───
     def _match_catchlight_blobs(
         self, left_blobs: List[dict], right_blobs: List[dict]
     ) -> Optional[float]:
-        """Match catchlight blobs between eyes by spatial proximity.
-
-        Returns minimum divergence across all matched pairs, or None if no match.
-        """
+        """Match catchlight blobs between eyes by spatial proximity."""
         if not left_blobs or not right_blobs:
             return None
 
@@ -285,8 +240,7 @@ class CornealTool(BaseForensicTool):
 
         return min_divergence if matched else None
 
-    # ─── FIX 7: Composite Confidence ───
-
+    # ─── Composite Confidence ───
     def _compute_confidence(
         self,
         left_blobs: List[dict],
@@ -323,7 +277,6 @@ class CornealTool(BaseForensicTool):
         return max(0.1, min(0.9, confidence))
 
     # ─── MAIN INFERENCE ───
-
     def _run_inference(self, input_data: Dict[str, Any]) -> ToolResult:
         start_time = time.time()
 
@@ -350,7 +303,7 @@ class CornealTool(BaseForensicTool):
         face_results = []
 
         for face in tracked_faces:
-            # FIX: Replace 'or' on numpy arrays to avoid truthiness ambiguity
+            # FIX: Safe extraction of crops (avoiding 'or' on numpy arrays)
             face_crop = face.get("face_crop_380")
             if face_crop is None:
                 face_crop = face.get("face_crop_224")
@@ -367,52 +320,48 @@ class CornealTool(BaseForensicTool):
             if landmarks.shape[0] < 478:
                 continue
 
-            # FIX 6: Glasses detection gate
+            # FIX C-05: Glasses detection gate → structural abstention
             if self._detect_glasses(face_crop, landmarks):
-                face_results.append(
-                    {
-                        "identity_id": face.get("identity_id", 0),
-                        "fake_score": 0.0,
-                        "confidence": 0.0,
-                        "catchlights_detected": False,
-                        "divergence": 0.0,
-                        "consistent": None,
-                        "interpretation": (
-                            "Corneal analysis abstained: Glasses detected. "
-                            "Lens reflections cannot be reliably distinguished from corneal catchlights."
-                        ),
-                    }
-                )
+                face_results.append({
+                    "identity_id": face.get("identity_id", 0),
+                    "fake_score": 0.0,
+                    "confidence": 0.0,  # Structural abstention: no penalty
+                    "catchlights_detected": False,
+                    "divergence": 0.0,
+                    "consistent": None,
+                    "interpretation": (
+                        "Corneal analysis abstained: Glasses detected. "
+                        "Lens reflections cannot be reliably distinguished from corneal catchlights."
+                    ),
+                })
                 continue
 
-            # FIX 3: Head pose estimation
+            # Head pose estimation
             yaw, pitch, roll = self._estimate_head_pose(landmarks)
             total_pose = yaw + pitch + roll
 
             # If extreme head pose, abstain
             if total_pose > 45:
-                face_results.append(
-                    {
-                        "identity_id": face.get("identity_id", 0),
-                        "fake_score": 0.0,
-                        "confidence": 0.0,
-                        "catchlights_detected": False,
-                        "divergence": 0.0,
-                        "consistent": None,
-                        "interpretation": (
-                            f"Corneal analysis abstained: Extreme head pose "
-                            f"(yaw={yaw:.0f}°, pitch={pitch:.0f}°, roll={roll:.0f}°). "
-                            f"Catchlight geometry unreliable at this angle."
-                        ),
-                    }
-                )
+                face_results.append({
+                    "identity_id": face.get("identity_id", 0),
+                    "fake_score": 0.0,
+                    "confidence": 0.0,
+                    "catchlights_detected": False,
+                    "divergence": 0.0,
+                    "consistent": None,
+                    "interpretation": (
+                        f"Corneal analysis abstained: Extreme head pose "
+                        f"(yaw={yaw:.0f}°, pitch={pitch:.0f}°, roll={roll:.0f}°). "
+                        f"Catchlight geometry unreliable at this angle."
+                    ),
+                })
                 continue
 
             # Get iris landmarks (already in crop space for face_crop_224/380)
             left_iris = landmarks[468]
             right_iris = landmarks[473]
 
-            # FIX 5: Dynamic validation (no hardcoded y-bands)
+            # FIX M-03: Dynamic validation (no hardcoded y-bands)
             if not self._validate_iris_landmark(left_iris, face_crop):
                 continue
             if not self._validate_iris_landmark(right_iris, face_crop):
@@ -430,40 +379,34 @@ class CornealTool(BaseForensicTool):
 
             # No catchlights in either eye → abstain
             if left_centroid is None and right_centroid is None:
-                face_results.append(
-                    {
-                        "identity_id": face.get("identity_id", 0),
-                        "fake_score": 0.0,
-                        "confidence": 0.0,
-                        "catchlights_detected": False,
-                        "divergence": 0.0,
-                        "consistent": None,
-                        "interpretation": "No catchlights detected in either eye — abstaining.",
-                    }
-                )
+                face_results.append({
+                    "identity_id": face.get("identity_id", 0),
+                    "fake_score": 0.0,
+                    "confidence": 0.0,
+                    "catchlights_detected": False,
+                    "divergence": 0.0,
+                    "consistent": None,
+                    "interpretation": "No catchlights detected in either eye — abstaining.",
+                })
                 continue
 
             # Only one eye has catchlight → abstain
             if left_centroid is None or right_centroid is None:
-                face_results.append(
-                    {
-                        "identity_id": face.get("identity_id", 0),
-                        "fake_score": 0.0,
-                        "confidence": 0.0,
-                        "catchlights_detected": False,
-                        "divergence": 0.0,
-                        "consistent": None,
-                        "interpretation": "Catchlight in only one eye — insufficient data.",
-                    }
-                )
+                face_results.append({
+                    "identity_id": face.get("identity_id", 0),
+                    "fake_score": 0.0,
+                    "confidence": 0.0,
+                    "catchlights_detected": False,
+                    "divergence": 0.0,
+                    "consistent": None,
+                    "interpretation": "Catchlight in only one eye — insufficient data.",
+                })
                 continue
 
             # Measure divergence
-            divergence = float(
-                np.linalg.norm(np.array(left_centroid) - np.array(right_centroid))
-            )
+            divergence = float(np.linalg.norm(np.array(left_centroid) - np.array(right_centroid)))
 
-            # FIX 3: Widen tolerance for head rotation
+            # FIX: Widen tolerance for head rotation
             pose_multiplier = 1.0 + (POSE_DIVERGENCE_MULTIPLIER * total_pose)
             effective_max_divergence = self.max_divergence * pose_multiplier
 
@@ -471,7 +414,7 @@ class CornealTool(BaseForensicTool):
             fake_score = min(1.0, normalized_divergence / effective_max_divergence)
             consistent = bool(fake_score < self.consistency_threshold)
 
-            # FIX 7: Composite confidence
+            # Composite confidence
             iris_pixel_size = 10.0  # Approximate iris diameter at 224×224
             if face_crop.shape[0] == 380:
                 iris_pixel_size = 17.0  # Larger at 380×380
@@ -495,19 +438,17 @@ class CornealTool(BaseForensicTool):
                     f"score: {fake_score:.3f}). May indicate pose effects or synthetic artifacts."
                 )
 
-            face_results.append(
-                {
-                    "identity_id": face.get("identity_id", 0),
-                    "fake_score": fake_score,
-                    "confidence": confidence,
-                    "catchlights_detected": True,
-                    "divergence": divergence,
-                    "consistent": consistent,
-                    "left_offset": left_centroid,
-                    "right_offset": right_centroid,
-                    "interpretation": interpretation,
-                }
-            )
+            face_results.append({
+                "identity_id": face.get("identity_id", 0),
+                "fake_score": fake_score,
+                "confidence": confidence,
+                "catchlights_detected": True,
+                "divergence": divergence,
+                "consistent": consistent,
+                "left_offset": left_centroid,
+                "right_offset": right_centroid,
+                "interpretation": interpretation,
+            })
 
         if not face_results:
             return ToolResult(
@@ -532,13 +473,11 @@ class CornealTool(BaseForensicTool):
         if not best_face["catchlights_detected"]:
             summary = best_face["interpretation"]
         elif best_face["consistent"]:
-            summary = (
-                f"Corneal reflections consistent for face {best_face['identity_id']}."
-            )
+            summary = f"Corneal reflections consistent for face {best_face['identity_id']}. "
         else:
             summary = (
                 f"Asymmetric corneal reflections for face {best_face['identity_id']}. "
-                f"(out of {len(face_results)} analyzed)."
+                f"(out of {len(face_results)} analyzed). "
             )
 
         details = {
@@ -559,5 +498,5 @@ class CornealTool(BaseForensicTool):
             error=False,
             error_msg=None,
             execution_time=time.time() - start_time,
-            evidence_summary=summary,
+            evidence_summary=summary
         )

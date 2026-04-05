@@ -1,21 +1,21 @@
 """
-Aegis-X SBI (Self-Blended Images) Forensic Tool — V2
-----------------------------------------------------
+Aegis-X SBI (Self-Blended Images) Forensic Tool — V3 (Audit Corrected)
 Architecture:
-    - Backbone: EfficientNet-B4 (Trainable Head: 1792 -> 1)
-    - Input: 380x380 crops (Dual-scale: 1.15x and 1.25x)
-    - Explainability: GradCAM with MediaPipe Polygon Region Mapping
+- Backbone: EfficientNet-B4 (Trainable Head: 1792 -> 1)
+- Input: 380x380 crops (Dual-scale: 1.15x and 1.25x)
+- Explainability: GradCAM with MediaPipe Polygon Region Mapping
+- Padding: BORDER_REFLECT_101 (no artificial black edges)
 
-V2 Fixes:
-    1. BORDER_REFLECT padding instead of BORDER_CONSTANT (no artificial black edges)
-    2. Dual-scale averaging instead of max (prevents scale bias)
-    3. Polygon-based GradCAM region sampling (hundreds of pixels vs 5-11 points)
-    4. Multi-region boundary detection (requires 2+ adjacent regions elevated)
-    5. Skip threshold raised to 0.90 (SBI always runs unless extremely obvious)
-    6. Landmark coordinate validation with proper warnings
-    7. Removed per-face VRAM flush (unnecessary overhead)
+Key Fixes:
+1. m-05: BORDER_REFLECT_101 padding instead of BORDER_CONSTANT (no artificial edges)
+2. S-09: Skip threshold raised to 0.90 (SBI runs unless extremely obvious fake)
+3. M-06: Zero persistent state — all per-face data returned in ToolResult.details
+4. FIX 3: Polygon-based GradCAM region sampling (hundreds of pixels vs 5-11 points)
+5. FIX 4: Multi-region boundary detection (requires 2+ adjacent regions elevated)
+6. FIX 6: Landmark coordinate validation with proper warnings
+7. FIX 7: Removed per-face VRAM flush (unnecessary overhead)
+8. C-06: Calibrated confidence based on GradCAM boundary clarity
 """
-
 import os
 import torch
 import torch.nn as nn
@@ -25,29 +25,33 @@ import numpy as np
 import cv2
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
-
 from core.base_tool import BaseForensicTool
 from core.data_types import ToolResult
 from core.config import AegisConfig
 from utils.vram_manager import VRAMLifecycleManager
 from utils.logger import setup_logger
 
-# FIX #6: Threshold imports
-try:
-    from utils.thresholds import (
-        SBI_SKIP_CLIP_THRESHOLD,
-        SBI_FAKE_THRESHOLD,
-        SBI_GRADCAM_REGION_THRESHOLD,
-    )
-except ImportError:
-    SBI_SKIP_CLIP_THRESHOLD = 0.90  # FIX 5: Raised from 0.70
-    SBI_FAKE_THRESHOLD = 0.60
-    SBI_GRADCAM_REGION_THRESHOLD = 0.40
-
 logger = setup_logger(__name__)
 
-# MediaPipe Landmark Indices for Regions
-# FIX 3: Expanded indices for polygon-based region sampling
+# ──────────────────────────────────────────────────────────────
+# Threshold Imports with Fallbacks
+# ──────────────────────────────────────────────────────────────
+try:
+    from utils.thresholds import (
+        SBI_SKIP_UNIVFD_THRESHOLD,  # FIX S-09: Raised to 0.90
+        SBI_FAKE_THRESHOLD,
+        SBI_GRADCAM_REGION_THRESHOLD,
+        SBI_COMPRESSION_DISCOUNT,
+    )
+except ImportError:
+    SBI_SKIP_UNIVFD_THRESHOLD = 0.90
+    SBI_FAKE_THRESHOLD = 0.60
+    SBI_GRADCAM_REGION_THRESHOLD = 0.40
+    SBI_COMPRESSION_DISCOUNT = 0.40
+
+# ──────────────────────────────────────────────────────────────
+# MediaPipe Landmark Indices for Regions (FIX 3: Expanded for polygons)
+# ──────────────────────────────────────────────────────────────
 LANDMARK_REGIONS = {
     "jaw": [172, 136, 150, 149, 176, 148, 152, 377, 400, 379, 365],
     "hairline": [10, 338, 297, 332, 284],
@@ -72,6 +76,8 @@ ADJACENT_REGION_PAIRS = [
 
 
 class SBITool(BaseForensicTool):
+    """Detects face-swap & reenactment deepfakes via EfficientNet-B4 + patch consistency."""
+
     @property
     def tool_name(self) -> str:
         return "run_sbi"
@@ -80,6 +86,7 @@ class SBITool(BaseForensicTool):
         super().__init__()
         self.device = None
         self.has_sigmoid = False
+        self._weights_loaded_ok = False
 
         # Strict ImageNet Normalization for EfficientNet
         self.normalize = transforms.Normalize(
@@ -90,8 +97,15 @@ class SBITool(BaseForensicTool):
 
     def setup(self):
         """Tool-specific setup called by the engine before execution."""
-        logger.info("SBITool setup complete")
+        logger.info("SBITool setup complete.")
         return True
+
+    # ──────────────────────────────────────────────────────────────
+    # M-06 Fix: Explicit state reset to prevent cross-inference contamination
+    # ──────────────────────────────────────────────────────────────
+    def reset_state(self) -> None:
+        """Clear any cached state between inferences."""
+        self._weights_loaded_ok = False
 
     def _load_model(self) -> torch.nn.Module:
         """Load EfficientNet-B4 for SBI detection.
@@ -110,9 +124,7 @@ class SBITool(BaseForensicTool):
             # Checkpoint has 2-class output (class 0=real, class 1=fake)
             model._fc = nn.Linear(num_features, 2)
             use_efficientnet_pytorch = True
-            logger.info(
-                "SBI: Using efficientnet_pytorch architecture (matches checkpoint)"
-            )
+            logger.info("SBI: Using efficientnet_pytorch architecture (matches checkpoint)")
         except ImportError:
             logger.warning(
                 "SBI: efficientnet_pytorch not available. Falling back to torchvision with key remapping."
@@ -317,8 +329,15 @@ class SBITool(BaseForensicTool):
             return cam
 
         finally:
-            hook_forward.remove()
-            hook_backward.remove()
+            # FIX m-08: Ensure hooks are always removed even if exception occurs
+            try:
+                hook_forward.remove()
+            except:
+                pass
+            try:
+                hook_backward.remove()
+            except:
+                pass
 
     def _map_regions_polygon(
         self, cam: np.ndarray, landmarks: np.ndarray
@@ -403,17 +422,29 @@ class SBITool(BaseForensicTool):
 
         return False, "diffuse", best_score
 
+    def _calculate_confidence(self, score: float, boundary_detected: bool) -> float:
+        """C-06 Fix: Calibrated confidence based on boundary clarity + score margin."""
+        base_conf = 0.4
+        if boundary_detected:
+            # Strong boundary = high confidence
+            base_conf += 0.3
+        # Boost confidence as score moves away from threshold
+        margin = abs(score - 0.5) * 2.0
+        return min(0.95, max(0.4, base_conf + 0.3 * margin))
+
     def _run_inference(self, input_data: dict) -> ToolResult:
         import time
 
         start_time = time.time()
 
-        # FIX #5: Context passing
+        # FIX #5: Context passing for compression/grayscale detection
         context = input_data.get("context", {})
         visual_score = context.get("siglip_score", context.get("clip_score", 0.0))
+        is_grayscale = context.get("is_grayscale", False)
+        compression_detected = context.get("compression_detected", False)
 
-        # FIX 5: Raised skip threshold to 0.90 — SBI should almost always run
-        if visual_score > SBI_SKIP_CLIP_THRESHOLD:
+        # FIX S-09: Raised skip threshold to 0.90 — SBI should almost always run
+        if visual_score > SBI_SKIP_UNIVFD_THRESHOLD:
             return ToolResult(
                 tool_name=self.tool_name,
                 success=True,
@@ -425,7 +456,7 @@ class SBITool(BaseForensicTool):
                 execution_time=time.time() - start_time,
                 evidence_summary=(
                     f"SBI analysis bypassed: Image exhibits extremely strong fully-synthetic signatures "
-                    f"(Primary Visual Score {visual_score:.2f} > {SBI_SKIP_CLIP_THRESHOLD}). "
+                    f"(Primary Visual Score {visual_score:.2f} > {SBI_SKIP_UNIVFD_THRESHOLD}). "
                     f"SBI is designed exclusively for face-swap composites."
                 ),
             )
@@ -445,7 +476,7 @@ class SBITool(BaseForensicTool):
             )
 
         with VRAMLifecycleManager(self._load_model) as model:
-            if getattr(self, "_weights_loaded_ok", False) is False:
+            if not self._weights_loaded_ok:
                 return ToolResult(
                     tool_name=self.tool_name,
                     success=True,
@@ -469,6 +500,7 @@ class SBITool(BaseForensicTool):
             best_scale = None
             scores_per_scale = {"1.15x": 0.0, "1.25x": 0.0}
             boundary_detected = False
+            per_face_details = []  # FIX M-06: Collect details per face, return in result
 
             for face in tracked_faces:
                 face_crop = getattr(face, "face_crop_380", None)
@@ -514,9 +546,7 @@ class SBITool(BaseForensicTool):
                     # 2-class model: class 0=real, class 1=fake (checkpoint convention)
                     import torch.nn.functional as F_sbi
 
-                    SBI_TEMPERATURE = (
-                        3.0  # Desaturates extreme logits for better calibration
-                    )
+                    SBI_TEMPERATURE = 3.0  # Desaturates extreme logits for better calibration
                     score_115 = F_sbi.softmax(out_115 / SBI_TEMPERATURE, dim=1)[
                         0, 1
                     ].item()
@@ -569,6 +599,15 @@ class SBITool(BaseForensicTool):
                 # FIX 7: Removed per-face VRAM flush — unnecessary overhead
                 del tensor_115, tensor_125
 
+                # FIX M-06: Collect per-face details for transparent reporting
+                per_face_details.append({
+                    "scale_115_score": round(score_115, 4),
+                    "scale_125_score": round(score_125, 4),
+                    "avg_score": round(avg_score, 4),
+                    "boundary_detected": boundary_detected if avg_score > SBI_FAKE_THRESHOLD else False,
+                    "boundary_region": best_boundary_region if avg_score > SBI_FAKE_THRESHOLD else None,
+                })
+
         execution_time = time.time() - start_time
 
         # Pass through continuous model score directly.
@@ -576,23 +615,28 @@ class SBITool(BaseForensicTool):
         # GradCAM boundary detection modifies CONFIDENCE, not the score.
         final_score = best_score
 
-        # Confidence: GradCAM boundary boosts confidence, absence lowers it
+        # C-06 Fix: Calibrated confidence
+        confidence = self._calculate_confidence(final_score, boundary_detected)
+
+        # Apply compression discount if detected
+        if compression_detected:
+            final_score *= SBI_COMPRESSION_DISCOUNT
+            logger.info(f"SBI: Compression detected — score dampened by {SBI_COMPRESSION_DISCOUNT}x")
+
+        # Evidence summary
         if boundary_detected:
-            confidence = min(1.0, best_score + 0.3)
             summary = (
                 f"SBI detector: localized blend boundary detected at {best_boundary_region} "
                 f"(authenticity: {1.0 - final_score:.2f}, scale: {best_scale}). "
                 f"Consistent with face-swap compositing artifact."
             )
-        elif best_score > SBI_FAKE_THRESHOLD:
+        elif final_score > SBI_FAKE_THRESHOLD:
             # Model says fake but no clean boundary — lower confidence
-            confidence = best_score * 0.7
             summary = (
                 f"SBI detector: elevated synthetic signatures (authenticity: {1.0 - final_score:.2f}), "
                 f"but no localized boundary found. Diffuse suspicion."
             )
         else:
-            confidence = max(0.4, 1.0 - best_score)
             summary = (
                 f"SBI detector: no blend boundary detected (authenticity: {1.0 - final_score:.2f}). "
                 f"Authentic / No artifacts."
@@ -601,14 +645,16 @@ class SBITool(BaseForensicTool):
         return ToolResult(
             tool_name=self.tool_name,
             success=True,
-            score=final_score,
-            confidence=confidence,
+            score=round(final_score, 4),
+            confidence=round(confidence, 4),
             details={
                 "boundary_detected": boundary_detected,
                 "boundary_region": best_boundary_region,
                 "winning_scale": best_scale,
                 "scores_per_scale": scores_per_scale,
                 "execution_time": execution_time,
+                "weights_loaded_ok": self._weights_loaded_ok,
+                "per_face_details": per_face_details,  # FIX M-06: Transparent, no state leakage
             },
             error=False,
             error_msg=None,
