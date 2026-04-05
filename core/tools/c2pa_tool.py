@@ -272,7 +272,7 @@ class C2PATool(BaseForensicTool):
         return ToolResult(
             tool_name=self.tool_name,
             success=True,
-            score=0.0,
+            real_prob=0.5,
             confidence=0.0,  # Structural abstention: no penalty
             details={"c2pa_verified": False, "abstention_reason": "no_c2pa_data"},
             error=False,
@@ -289,7 +289,7 @@ class C2PATool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={"c2pa_verified": False},
                 error=True,
@@ -370,7 +370,7 @@ class C2PATool(BaseForensicTool):
             if sig_valid:
                 if is_ai_generated:
                     # FIX S-03: AI declaration + valid signature = definitive fake
-                    score = 1.0
+                    real_prob = 0.0
                     confidence = 0.95
                     summary = (
                         f"C2PA verified: AI-generated content declared by {ai_tool_name}. "
@@ -378,7 +378,7 @@ class C2PATool(BaseForensicTool):
                     )
                 elif severity >= 3:
                     # Heavy manipulation (retouching, compositing)
-                    score = 0.6
+                    real_prob = 0.4
                     confidence = 0.7
                     summary = (
                         f"C2PA verified: Heavily edited content ({len(action_descriptions)} actions). "
@@ -386,7 +386,7 @@ class C2PATool(BaseForensicTool):
                     )
                 elif severity >= 1:
                     # Moderate manipulation (crop, filter, adjust)
-                    score = 0.3
+                    real_prob = 0.7
                     confidence = 0.8
                     summary = (
                         f"C2PA verified: Moderately edited content. "
@@ -394,7 +394,7 @@ class C2PATool(BaseForensicTool):
                     )
                 else:
                     # Clean creation
-                    score = 0.0
+                    real_prob = 1.0
                     confidence = 0.95
                     summary = (
                         f"C2PA verified: Clean creation by {sig_detail}. "
@@ -404,7 +404,7 @@ class C2PATool(BaseForensicTool):
                 # Invalid/untrusted signature
                 if is_ai_generated:
                     # AI declared but signature invalid — possible spoofing attempt
-                    score = 0.8
+                    real_prob = 0.2
                     confidence = 0.6
                     summary = (
                         f"C2PA manifest indicates AI generation ({ai_tool_name}) "
@@ -413,7 +413,7 @@ class C2PATool(BaseForensicTool):
                     )
                 else:
                     # No AI claim, invalid signature — low confidence abstention
-                    score = 0.0
+                    real_prob = 0.5
                     confidence = 0.3
                     summary = (
                         f"C2PA manifest found but signature could not be verified: {sig_detail}. "
@@ -436,7 +436,7 @@ class C2PATool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=True,
-                score=score,
+                real_prob=real_prob,
                 confidence=confidence,
                 details=details,
                 error=False,
@@ -449,7 +449,7 @@ class C2PATool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={"c2pa_verified": False, "error": "json_parse_failed"},
                 error=True,
@@ -462,7 +462,7 @@ class C2PATool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={"c2pa_verified": False, "error": type(e).__name__},
                 error=True,

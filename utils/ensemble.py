@@ -25,6 +25,7 @@ from utils.thresholds import (
     WEIGHT_GEOMETRY,
     WEIGHT_ILLUMINATION,
     WEIGHT_CORNEAL,
+    WEIGHT_C2PA,
     ENSEMBLE_REAL_THRESHOLD,
     ENSEMBLE_FAKE_THRESHOLD,
     ENSEMBLE_INCONCLUSIVE_WEIGHT,
@@ -53,6 +54,18 @@ from utils.thresholds import (
     EMA_SMOOTHING_ENABLED,
     ENCORE_NEAR_MISS_THRESHOLD,
     ENCORE_CORROBORATION_SENSITIVITY,
+    LOGIT_DAMPING_FACTOR,
+    NEUTRAL_DEADZONE_LOW,
+    NEUTRAL_DEADZONE_HIGH,
+    NEUTRAL_DEADZONE_CONFIDENCE_MIN,
+    ENSEMBLE_SPECIALIST_DOMINANCE_FACTOR,
+    ENSEMBLE_SPECIALIST_FAKE_THRESHOLD,
+    ENSEMBLE_SPECIALIST_MIN_CONFIDENCE,
+    GPU_SINGLE_DETECT_HIGH_CONFIDENCE,
+    GPU_MULTI_DETECT_MIN_CONFIDENCE,
+    GPU_SINGLE_DETECT_BOOST,
+    GPU_MULTI_DETECT_BOOST,
+    CPU_SUPPORT_WHEN_GPU_AVAILABLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +98,7 @@ _RAW_WEIGHT_MAP = {
     "run_geometry": WEIGHT_GEOMETRY,
     "run_illumination": WEIGHT_ILLUMINATION,
     "run_corneal": WEIGHT_CORNEAL,
+    "check_c2pa": WEIGHT_C2PA,
 }
 
 # Categories for Independence Check (S-10)
@@ -174,7 +188,7 @@ def _extract_context(
             if context["dct_peak_ratio"] > DCT_DOUBLE_QUANT_COMPRESSION_THRESHOLD:
                 context["compression_detected"] = True
         elif tool_name == "run_univfd":
-            context["univfd_score"] = result.fake_score
+            context["univfd_score"] = 1.0 - result.real_prob
             context["univfd_available"] = True
     return context
 
@@ -185,6 +199,17 @@ def _compute_conflict_std(implied_probs: List[float]) -> float:
     mean = sum(implied_probs) / len(implied_probs)
     variance = sum((p - mean) ** 2 for p in implied_probs) / len(implied_probs)
     return variance**0.5
+
+
+def _to_logit(p: float) -> float:
+    """Convert probability to log-odds (logit)."""
+    p = max(1e-6, min(1.0 - 1e-6, p))
+    return float(np.log(p / (1.0 - p)))
+
+
+def _from_logit(l: float) -> float:
+    """Convert log-odds (logit) back to probability."""
+    return float(1.0 / (1.0 + np.exp(-l)))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -212,8 +237,12 @@ def _route(
     if result.confidence <= 0.0:
         return (0.0, 0.0, True)
 
-    score = max(0.0, min(1.0, result.fake_score))
+    real_prob = max(0.0, min(1.0, result.real_prob))
+    score = 1.0 - real_prob
     tool_name = _normalize_tool_name(result.tool_name)
+
+    # base_weight is set below.
+
     base_weight = WEIGHT_MAP.get(tool_name, 0.0)
 
     if base_weight == 0.0 and tool_name != "check_c2pa":
@@ -419,9 +448,11 @@ def calculate_ensemble_score(
 
     # 2. Route Tools
     total_contribution, total_weight = 0.0, 0.0
-    weight_breakdown = {} if return_metadata else None
+    weight_breakdown = {}  # Internal metadata always needed for Prong 1 Logic
     tools_ran, abstentions, implied_probs, gpu_specialist_probs = [], [], [], []
     gpu_abstained_tools = []
+    gpu_contribution, gpu_weight = 0.0, 0.0
+    cpu_contribution, cpu_weight = 0.0, 0.0
 
     for result in tool_results:
         tool_name = _normalize_tool_name(result.tool_name)
@@ -429,7 +460,7 @@ def calculate_ensemble_score(
             abstentions.append(
                 {
                     "tool_name": tool_name,
-                    "fake_score": result.fake_score,
+                    "real_prob": result.real_prob,
                     "reason": "tool_failed",
                 }
             )
@@ -439,11 +470,39 @@ def calculate_ensemble_score(
             result, context, use_confidence_weighting
         )
 
+        # Dynamic Confidence Dampening: 
+        # If a tool (like a GPU specialist) outputs an extreme score (e.g. 95% authentic) 
+        # but has very low confidence (e.g. 40%), we quadratically strip its voting power. 
+        # It should not be allowed to heavily dilute confident votes from other detectors out of sheer noise.
+        if not is_abstention and result.confidence < 0.60:
+            penalty = (result.confidence / 0.60) ** 2
+            contribution *= penalty
+            effective_weight *= penalty
+
+        # AUDIT FIX S-12 (UPDATED): The "Suspicious Middle"
+        # If multiple GPU tools return scores near 50-59 (authenticity) with low confidence, 
+        # they are typically sensing Deepfake artifacts they cannot mathematically lock onto.
+        # We NO LONGER skip these! We track them to boost fake suspicion.
+        is_suspicious_middle = False
+        if (
+            not is_abstention
+            and tool_name in GPU_SPECIALISTS
+            and NEUTRAL_DEADZONE_LOW <= (1.0 - result.real_prob) <= NEUTRAL_DEADZONE_HIGH
+            and result.confidence < NEUTRAL_DEADZONE_CONFIDENCE_MIN
+        ):
+            is_suspicious_middle = True
+            logger.info(
+                f"Ensemble: Suspicious Middle hit for {tool_name} "
+                f"(fake_prob={1.0 - result.real_prob:.2f}, conf={result.confidence:.2f})."
+            )
+
         if is_abstention:
+            effective_weight = 0.0
+            contribution = 0.0
             abstentions.append(
                 {
                     "tool_name": tool_name,
-                    "fake_score": result.fake_score,
+                    "real_prob": result.real_prob,
                     "reason": "abstain_or_failure",
                 }
             )
@@ -467,13 +526,21 @@ def calculate_ensemble_score(
         total_contribution += contribution
         total_weight += effective_weight
 
-        if return_metadata:
-            weight_breakdown[tool_name] = {
-                "fake_score": result.fake_score,
-                "confidence": result.confidence,
-                "contribution": contribution,
-                "effective_weight": effective_weight,
-            }
+        if not is_abstention and effective_weight > 0.0:
+            if tool_name in GPU_SPECIALISTS:
+                gpu_contribution += contribution
+                gpu_weight += effective_weight
+            else:
+                cpu_contribution += contribution
+                cpu_weight += effective_weight
+
+        weight_breakdown[tool_name] = {
+            "real_prob": result.real_prob,
+            "fake_prob": 1.0 - result.real_prob,
+            "confidence": result.confidence,
+            "contribution": contribution,
+            "effective_weight": effective_weight,
+        }
 
     if total_weight < 1e-9:
         return {
@@ -483,66 +550,147 @@ def calculate_ensemble_score(
             "abstentions": abstentions,
         }
 
-    base_ensemble = total_contribution / total_weight
+    # GPU tools are primary detectors; CPU tools are supportive when GPU evidence exists.
+    if gpu_weight > 1e-9:
+        gpu_only_fake_prob = gpu_contribution / gpu_weight
+        cpu_only_fake_prob = cpu_contribution / cpu_weight if cpu_weight > 1e-9 else gpu_only_fake_prob
+        base_ensemble = ((1.0 - CPU_SUPPORT_WHEN_GPU_AVAILABLE) * gpu_only_fake_prob) + (
+            CPU_SUPPORT_WHEN_GPU_AVAILABLE * cpu_only_fake_prob
+        )
+    else:
+        base_ensemble = total_contribution / total_weight
 
     # 3. Advanced Logic (Prongs)
     max_gpu_prob = max(gpu_specialist_probs) if gpu_specialist_probs else 0.0
     highest_suspicion = max(implied_probs) if implied_probs else 0.0
 
-    # PRONG 1: Specialized Hunter Override (Asymmetric Noisy-OR Corroboration)
-    # GPU tools are specialized anomaly detectors. A low score means "no anomaly found in my domain",
-    # NOT "provably real". Therefore, we extract the 'suspicion mass' from each tool
-    # and combine them using Noisy-OR (Probability of Union). 
-    
-    # AUDIT FIX S-11: Include 'Near-Miss' suspects (0.35-0.50) with partial mass.
-    suspicion_masses = []
-    for p in gpu_specialist_probs:
-        if p > 0.5:
-            # Full Suspect
-            suspicion_masses.append(p)
-        elif p >= ENCORE_NEAR_MISS_THRESHOLD:
-            # Near-Miss: Contributes half of its suspicion above the threshold
-            # Example: 0.40 suspect with 0.35 threshold -> (0.40-0.35)*0.5 + 0.5 = 0.525 mask
-            # For simplicity, we just use a weighted blend to push it slightly over 0.5
-            mass = 0.5 + (p - ENCORE_NEAR_MISS_THRESHOLD) * ENCORE_CORROBORATION_SENSITIVITY
-            suspicion_masses.append(mass)
+    # GPU-first policy (soft, non-forced):
+    # 1) Single GPU specialist with high confidence gets a strong suspicion boost.
+    # 2) Two GPU specialists voting fake get corroboration boost with lower (but not low) confidence.
+    gpu_votes = []
+    for tool_name, meta in weight_breakdown.items():
+        if tool_name not in GPU_SPECIALISTS or meta["effective_weight"] <= 1e-9:
+            continue
+        gpu_votes.append(
+            {
+                "tool_name": tool_name,
+                "fake_prob": float(meta["fake_prob"]),
+                "confidence": float(meta["confidence"]),
+            }
+        )
 
-    if suspicion_masses:
-        # Calculate Probability of Union for independent anomaly detectors
-        # P_union = 1 - ( (1-p1) * (1-p2) * ... )
-        combined_miss_chance = 1.0
-        for p in suspicion_masses:
-            combined_miss_chance *= (1.0 - p)
-        corroborated_score = 1.0 - combined_miss_chance
+    single_high_conf_fake = any(
+        v["fake_prob"] > ENSEMBLE_SPECIALIST_FAKE_THRESHOLD
+        and v["confidence"] >= GPU_SINGLE_DETECT_HIGH_CONFIDENCE
+        for v in gpu_votes
+    )
+
+    dual_fake_votes = [
+        v
+        for v in gpu_votes
+        if v["fake_prob"] > ENSEMBLE_SPECIALIST_FAKE_THRESHOLD
+        and v["confidence"] >= GPU_MULTI_DETECT_MIN_CONFIDENCE
+    ]
+
+    gpu_policy_boost = 0.0
+    gpu_policy_reason = None
+    if single_high_conf_fake:
+        strongest = max(v["fake_prob"] for v in gpu_votes)
+        gpu_policy_boost = GPU_SINGLE_DETECT_BOOST * strongest
+        gpu_policy_reason = "single_high_confidence_gpu"
+    elif len(dual_fake_votes) >= 2:
+        top_two = sorted(dual_fake_votes, key=lambda x: x["fake_prob"], reverse=True)[:2]
+        avg_top_two = sum(v["fake_prob"] for v in top_two) / 2.0
+        gpu_policy_boost = GPU_MULTI_DETECT_BOOST * avg_top_two
+        gpu_policy_reason = "two_gpu_fake_votes"
+
+    # PRONG 1: Specialized Hunter Override (Damped Logit Fusion - Audit Fix S-14)
+    # GPU tools are specialized anomaly detectors. Instead of aggressive Noisy-OR,
+    # we use Logit-Sum Fusion which is more stable for forensic evidence.
+    
+    suspicion_logits = []
+    # Track categories to prevent double-counting (S-10)
+    categories_contributed = set()
+
+    # Re-extracting tool associations for category-aware logit sum
+    for tool_name, meta in weight_breakdown.items():
+        if tool_name not in GPU_SPECIALISTS or meta["effective_weight"] <= 1e-9:
+            continue
+        p = meta["fake_prob"]
         
-        # Ensure it perfectly overrides the base
-        fake_score = max(corroborated_score, max_gpu_prob, base_ensemble)
+        # Determine mass
+        mass = 0.0
+        if p > 0.5:
+            mass = p
+        elif p >= ENCORE_NEAR_MISS_THRESHOLD:
+            mass = 0.5 + (p - ENCORE_NEAR_MISS_THRESHOLD) * ENCORE_CORROBORATION_SENSITIVITY
         
-        if corroborated_score > max_gpu_prob + 0.01:
-            logger.info(
-                f"Hunter Corroboration Boost: Corroborated {len(suspicion_masses)} suspects. Amplified max {max_gpu_prob:.4f} -> {fake_score:.4f}."
-            )
+        if mass > 0.51:
+            logit = _to_logit(mass)
+            
+            # Category Damping
+            tool_cat = None
+            for cat, tools in _INDEPENDENCE_GROUPS.items():
+                if tool_name in tools:
+                    tool_cat = cat
+                    break
+            
+            if tool_cat and tool_cat in categories_contributed:
+                # Same category? Dampen the additional evidence by 50%
+                logit *= 0.5
+                logger.info(f"Ensemble: Category damping applied to {tool_name} ({tool_cat}).")
+
+            # AUDIT FIX S-15: Confidence-Gated Contribution (2026 Premium)
+            # Logit influence is proportional to confidence squared.
+            # (e.g. 0.5 conf -> 0.25 influence, 0.9 conf -> 0.81 influence)
+            logit *= (meta["confidence"] ** 2)
+
+            # AUDIT FIX S-16: Specialist Dominance
+            # If a specialist tool finds a deepfake with good confidence, amplify it.
+            if meta["confidence"] >= ENSEMBLE_SPECIALIST_MIN_CONFIDENCE:
+                logit *= ENSEMBLE_SPECIALIST_DOMINANCE_FACTOR
+                logger.info(f"Ensemble: Dominance factor applied to specialized tool {tool_name}.")
+            
+            suspicion_logits.append(logit)
+            if tool_cat:
+                categories_contributed.add(tool_cat)
+
+    if suspicion_logits:
+        # Damped Logit Sum
+        combined_logit = sum(suspicion_logits) * LOGIT_DAMPING_FACTOR
+        corroborated_score = _from_logit(combined_logit)
+        
+        # Check if we have massive disagreement between tools
+        conflict_tmp = _compute_conflict_std(implied_probs)
+
+        # Isolated anomaly dampening: if a single tool goes rogue but the 
+        # rest strongly disagree (high variance), we trust the ensemble baseline.
+        if len(suspicion_logits) == 1 and conflict_tmp > BORDERLINE_CONSENSUS_LOW / 2.0:
+            logger.info("Ensemble: Single suspicion logit combined with high conflict. Relying on base_ensemble.")
+            fake_score = base_ensemble
         else:
-            logger.info(
-                f"Specialized Hunter Override: GPU tool flagged fake score {fake_score:.4f}. Overriding base {base_ensemble:.4f}."
-            )
+            # Removed max_gpu_prob here to prevent a single noisy tool from 
+            # steamrolling unanimous authentic votes from other detectors.
+            fake_score = max(corroborated_score, base_ensemble)
+        
+        logger.info(
+            f"Logit Fusion: Combined {len(suspicion_logits)} suspects. Mass: {corroborated_score:.4f} (Base: {base_ensemble:.4f})."
+        )
     else:
         fake_score = base_ensemble
 
-    # PRONG 2: Borderline Consensus (Audit Fix S-02)
-    # If tools cluster near 0.5, do NOT boost to fake. Mark inconclusive.
-    borderline_gpu = [
-        p
-        for p in gpu_specialist_probs
-        if BORDERLINE_CONSENSUS_LOW <= p <= BORDERLINE_CONSENSUS_HIGH
+    # PRONG 2: The "Suspicious Middle" Consensus (User requested)
+    # If multiple GPU tools return authentic-leaning but borderline scores 
+    # (e.g. 50-59%) with low confidence, this indicates a subtle deepfake
+    # that evaded strict classifiers. Boost to fake!
+    borderline_gpu_tools = [
+        v for v in gpu_votes if BORDERLINE_CONSENSUS_LOW <= v["fake_prob"] <= BORDERLINE_CONSENSUS_HIGH
+        and v["confidence"] < NEUTRAL_DEADZONE_CONFIDENCE_MIN
     ]
-    if len(borderline_gpu) >= 2:
-        logger.info(f"Borderline Consensus: {len(borderline_gpu)} GPU tools uncertain.")
-        # Optional: Slight confidence reduction or just let it be.
-        # For safety, if base is borderline, we don't push it to Fake.
-        if fake_score >= 0.40 and fake_score <= 0.60:
-            # Ensure we don't falsely trigger fake due to noise
-            pass
+    if len(borderline_gpu_tools) >= 2:
+        logger.warning(f"Suspicious Consensus: {len(borderline_gpu_tools)} GPU tools are deeply uncertain. Flagging as FAKE.")
+        # Push the fake score safely above the 0.54 fake cutoff.
+        fake_score = max(fake_score, 0.85)
 
     # PRONG 3: GPU Coverage Degradation (Audit Fix C-05)
     # Only penalize if tools ABSTAINED EVIDENTIALLY (ran but failed/uncertain).
@@ -554,6 +702,8 @@ def calculate_ensemble_score(
         )
 
     candidate_score = max(base_ensemble, fake_score)
+    if gpu_policy_boost > 0.0:
+        candidate_score = min(1.0, candidate_score + gpu_policy_boost)
     degraded_score = candidate_score * gpu_degradation_boost
 
     # Cap degradation so confident real scores don't flip
@@ -570,7 +720,7 @@ def calculate_ensemble_score(
     output = {
         **_get_base_schema(),
         "ensemble_score": ensemble_score,
-        "fake_score": final_fake_score,
+        "real_prob": ensemble_score,
         "is_inconclusive": total_weight < ENSEMBLE_INCONCLUSIVE_WEIGHT
         or (conflict_std > 0.25),
         "total_weight": round(total_weight, 4),
@@ -578,6 +728,8 @@ def calculate_ensemble_score(
         "abstentions": abstentions,
         "conflict_std": round(conflict_std, 4),
         "has_conflict": conflict_std > CONFLICT_STD_THRESHOLD,
+        "gpu_policy_reason": gpu_policy_reason,
+        "gpu_policy_boost": round(gpu_policy_boost, 4),
     }
 
     if return_metadata:
@@ -627,4 +779,6 @@ class EnsembleAggregator:
 
     def get_verdict(self) -> str:
         score = self.get_final_score()
-        return "FAKE" if score <= ENSEMBLE_REAL_THRESHOLD else "REAL"
+        if score <= 0.54:
+            return "FAKE"
+        return "REAL"

@@ -93,6 +93,7 @@ def evaluate():
     # 3. Pipeline Initialization
     config = AegisConfig()
     preprocessor = Preprocessor(config)
+    agent = ForensicAgent(config)
     
     results = []
     y_true, y_pred, y_scores = [], [], []
@@ -106,7 +107,6 @@ def evaluate():
             prep_result = preprocessor.process_media(str(file_path))
             
             # Analyze
-            agent = ForensicAgent(config)
             final_verdict = "INCONCLUSIVE"
             final_score = 0.5
             
@@ -114,7 +114,7 @@ def evaluate():
             for event in agent.analyze(prep_result, media_path=str(file_path), generate_explanation=False):
                 if event.event_type == "verdict":
                     final_verdict = event.data.get("verdict")
-                    final_score = event.data.get("score")
+                    final_score = event.data.get("real_prob")
             
             # Mapping: 1 = FAKE, 0 = REAL
             # final_score in Aegis is AUTHENTICITY (1.0 = Real, 0.0 = Fake)
@@ -190,7 +190,6 @@ def evaluate():
         print(f" Saved metrics to: {metrics_file}")
     else:
         # Fallback to simple JSON if pandas/sklearn missing
-        import json
         with open(results_file.with_suffix(".json"), "w") as f:
             json.dump(results, f, indent=4)
         print(f"Saved results to {results_file.with_suffix('.json')}")

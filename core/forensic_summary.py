@@ -42,11 +42,10 @@ def build_phi3_prompt(
     prompt_parts.append("These are classical physics/geometry heuristics that act as supporters.")
     prompt_parts.append("They are noisy and should NEVER override a unanimous Authentic read from Primary AI Detectors.\n")
     
-    # Helper to convert fake_score to real probability and interpret
-    def _interpret(score: float, tool_desc: str, high_label: str, low_label: str, confidence: float = 1.0) -> str:
+    # Helper to interpret real probability directly
+    def _interpret(real_prob: float, tool_desc: str, high_label: str, low_label: str, confidence: float = 1.0) -> str:
         if confidence == 0.0:
             return f"{tool_desc}: [ABSTAINED] Insufficient data. Do NOT assume authenticity."
-        real_prob = 1.0 - score
         pct = f"{real_prob:.0%}"
         if real_prob >= 0.70:
             interpretation = f"CLEAR — {high_label}"
@@ -83,8 +82,7 @@ def build_phi3_prompt(
     if "run_geometry" in tool_results:
         r = tool_results["run_geometry"]
         violations = r.details.get("violations", [])
-        real_prob = 1.0 - r.score
-        prompt_parts.append(_interpret(r.score, "📏 Geometry (Facial Proportion Helper)", 
+        prompt_parts.append(_interpret(r.real_prob, "📏 Geometry (Facial Proportion Helper)", 
                                        "all anatomical ratios normal",
                                        "impossible facial proportions detected", r.confidence))
         if violations:
@@ -93,7 +91,7 @@ def build_phi3_prompt(
     # Illumination
     if "run_illumination" in tool_results:
         r = tool_results["run_illumination"]
-        prompt_parts.append(_interpret(r.score, "💡 Illumination (Lighting Consistency Helper)",
+        prompt_parts.append(_interpret(r.real_prob, "💡 Illumination (Lighting Consistency Helper)",
                                        "consistent lighting across face",
                                        "lighting inconsistencies detected", r.confidence))
         if r.confidence == 0.0:
@@ -102,7 +100,7 @@ def build_phi3_prompt(
     # Corneal
     if "run_corneal" in tool_results:
         r = tool_results["run_corneal"]
-        prompt_parts.append(_interpret(r.score, "👁️ Corneal (Eye Reflection Helper)",
+        prompt_parts.append(_interpret(r.real_prob, "👁️ Corneal (Eye Reflection Helper)",
                                        "consistent corneal reflections",
                                        "mismatched eye reflections detected", r.confidence))
         if r.confidence == 0.0:
@@ -115,14 +113,14 @@ def build_phi3_prompt(
     # UnivFD
     if "run_univfd" in tool_results:
         r = tool_results["run_univfd"]
-        prompt_parts.append(_interpret(r.score, "🧠 UnivFD (AI-Generated Image Specialist)",
+        prompt_parts.append(_interpret(r.real_prob, "🧠 UnivFD (AI-Generated Image Specialist)",
                                        "no GAN/diffusion fingerprints found",
                                        "AI-generation signatures detected", r.confidence))
 
     # Xception
     if "run_xception" in tool_results:
         r = tool_results["run_xception"]
-        prompt_parts.append(_interpret(r.score, "🔬 XceptionNet (Face-Swap Specialist)",
+        prompt_parts.append(_interpret(r.real_prob, "🔬 XceptionNet (Face-Swap Specialist)",
                                        "natural facial blending patterns",
                                        "face-swap blending artifacts detected", r.confidence))
     
@@ -130,18 +128,18 @@ def build_phi3_prompt(
     if "run_sbi" in tool_results:
         r = tool_results["run_sbi"]
         if r.details.get("boundary_detected"):
-            prompt_parts.append(_interpret(r.score, "🪡 SBI (Blend Boundary Specialist)",
+            prompt_parts.append(_interpret(r.real_prob, "🪡 SBI (Blend Boundary Specialist)",
                                            "no composite boundaries",
                                            f"blend boundary at {r.details.get('boundary_region', 'unknown')}", r.confidence))
         else:
-            prompt_parts.append(_interpret(r.score, "🪡 SBI (Blend Boundary Specialist)",
+            prompt_parts.append(_interpret(r.real_prob, "🪡 SBI (Blend Boundary Specialist)",
                                            "no blend boundaries detected",
                                            "blend boundaries detected", r.confidence))
     
     # FreqNet
     if "run_freqnet" in tool_results:
         r = tool_results["run_freqnet"]
-        prompt_parts.append(_interpret(r.score, "📡 FreqNet (Frequency Fingerprint Specialist)",
+        prompt_parts.append(_interpret(r.real_prob, "📡 FreqNet (Frequency Fingerprint Specialist)",
                                        "normal frequency spectrum",
                                        "anomalous frequency patterns detected", r.confidence))
     

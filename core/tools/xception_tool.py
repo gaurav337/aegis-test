@@ -122,7 +122,9 @@ class XceptionTool(BaseForensicTool):
         if img_array.dtype != np.uint8:
             img_array = img_array.astype(np.uint8)
             
-        resized = cv2.resize(img_array, (299, 299), interpolation=cv2.INTER_LANCZOS4)
+        h, w = img_array.shape[:2]
+        interp = cv2.INTER_AREA if (h > 299 and w > 299) else cv2.INTER_CUBIC
+        resized = cv2.resize(img_array, (299, 299), interpolation=interp)
         tensor = torch.from_numpy(resized).permute(2, 0, 1).unsqueeze(0).float() / 255.0
         tensor = self.normalize(tensor)
         return tensor.to(device)
@@ -165,30 +167,34 @@ class XceptionTool(BaseForensicTool):
 
     def _apply_consistency_dampening(self, mean_score: float, std_score: float, is_grayscale: bool = False) -> Tuple[float, str]:
         """
-        FIX S-08: Only dampen LOW suspicion scores. 
-        High suspicion + uniform patches = well-blended deepfake (DO NOT DAMPEN).
-        Low suspicion + uniform patches = ISP false positive (DAMPEN).
+        FIX S-08 (Revised): If patches are highly consistent (low variance), 
+        the image lacks localized face-swap artifacts. It is overwhelmingly more likely 
+        to be native camera sensor noise (false positive) rather than a "perfectly uniform" deepfake.
         """
         if mean_score < PATCH_ACTIVATION_SCORE:
             return mean_score, "Below activation threshold"
             
-        if is_grayscale:
-            return mean_score, "Grayscale evasion: dampening bypassed"
-            
+        # A deepfake face swap generally suffers from localized mismatches along the crop boundaries.
         if std_score >= PATCH_STD_THRESHOLD:
             return mean_score, f"Localized artifacts detected (std={std_score:.4f})"
             
-        # Low variance branch
-        if mean_score >= 0.43:
-            # High suspicion + uniform = sophisticated blend. Preserve score.
-            return mean_score, f"High suspicion, uniform processing (std={std_score:.4f}). Dampening bypassed."
+        # Below here, variance is low (uniform patch distribution).
+        # Extremely uniform patches are definitive signs of a clean natural camera sensor.
         
-        # Low suspicion + uniform = likely ISP artifact. Dampen more aggressively.
-        # Use an exponential scale so that very low variance clears the image significantly.
+        # Override high scores caused by native sensor noise using proportional scaling
+        if mean_score >= 0.43:
+            # Neutralize the unsupported CNN score using standard deviation ratio.
+            # A completely uniform patch (very low std) proportionally shrinks the fake score.
+            std_ratio = std_score / PATCH_STD_THRESHOLD
+            dampening = max(0.20, std_ratio)  # Let it organically scale down without hitting flat 0
+            adjusted = mean_score * dampening
+            return adjusted, f"CNN False Positive (uniform sensor noise, std={std_score:.4f}). Logically dampened unsupported score to {adjusted:.3f}."
+
+        # Low suspicion + uniform = Confirmed native media constraints.
         std_ratio = std_score / PATCH_STD_THRESHOLD
-        dampening = 1.0 - (PATCH_DAMPENING_FACTOR * (1.0 - std_ratio**0.5))
+        dampening = 1.0 - 0.7 * (1.0 - std_ratio**0.5) # Generic dampening
         adjusted = mean_score * dampening
-        return adjusted, f"Uniform ISP artifact. Adjusted {mean_score:.3f} to {adjusted:.3f} ({dampening:.2f}x reduction)."
+        return adjusted, f"Uniform camera artifact. Dampened {mean_score:.3f} to {adjusted:.3f}."
 
     def _calculate_confidence(self, score: float, weights_ok: bool) -> float:
         """Epistemic confidence: probability that the reported score is reliable."""
@@ -222,16 +228,16 @@ class XceptionTool(BaseForensicTool):
             except: pass
 
         if not np_crops:
-            return ToolResult(tool_name=self.tool_name, success=False, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=False, real_prob=0.5, confidence=0.0,
                               error=True, error_msg="No image data", execution_time=0.0,
                               evidence_summary="Xception: No image data available.")
 
-        worst_score = 0.0
+        worst_fake_prob = 0.0
         details_list = []
 
         with VRAMLifecycleManager(self._load_model) as model:
             if not self._weights_loaded_ok:
-                return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+                return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                                   details={"weights_loaded_ok": False, "execution_time": time.time()-start_time},
                                   evidence_summary="Model weights missing.")
 
@@ -253,8 +259,8 @@ class XceptionTool(BaseForensicTool):
                 base_score = max(full_score, patch_mean)
                 adjusted, note = self._apply_consistency_dampening(base_score, patch_std, is_grayscale)
                 
-                if adjusted > worst_score:
-                    worst_score = adjusted
+                if adjusted > worst_fake_prob:
+                    worst_fake_prob = adjusted
 
                 details_list.append({
                     "full_crop_score": round(full_score, 4),
@@ -264,19 +270,20 @@ class XceptionTool(BaseForensicTool):
                     "consistency_note": note
                 })
 
-        confidence = self._calculate_confidence(worst_score, self._weights_loaded_ok)
+        worst_real_prob = 1.0 - worst_fake_prob
+        confidence = self._calculate_confidence(worst_real_prob, self._weights_loaded_ok)
         execution_time = time.time() - start_time
 
-        if worst_score > self.fake_threshold:
-            summary = f"XceptionNet flagged facial blending anomalies (Authenticity: {1.0-worst_score:.2f})."
+        if worst_fake_prob > self.fake_threshold:
+            summary = f"XceptionNet flagged facial blending anomalies (Authenticity: {worst_real_prob:.2f})."
         else:
-            summary = f"XceptionNet found natural facial blending (Authenticity: {1.0-worst_score:.2f})."
+            summary = f"XceptionNet found natural facial blending (Authenticity: {worst_real_prob:.2f})."
 
         if details_list:
             summary += f" Patch consistency: {details_list[-1]['consistency_note']}"
 
         return ToolResult(
-            tool_name=self.tool_name, success=True, score=round(worst_score, 4),
+            tool_name=self.tool_name, success=True, real_prob=round(worst_real_prob, 4),
             confidence=round(confidence, 4),
             details={
                 "execution_time": execution_time,

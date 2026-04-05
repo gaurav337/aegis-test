@@ -69,7 +69,7 @@ def test_all_tools(test_image: str):
             print(f"   -> Status    : {status}")
             if not res.success:
                 print(f"   -> Error     : {res.error_msg}")
-            print(f"   -> Score     : {res.score:.3f}")
+            print(f"   -> Real Prob : {res.real_prob:.3f}")
             print(f"   -> Confidence: {res.confidence:.3f}")
             print(f"   -> Summary   : {res.evidence_summary}")
         except Exception as exc:

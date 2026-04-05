@@ -87,16 +87,16 @@ def evaluate(dataset_root, real_dir="Real", fake_dir="Fake", num_samples=200):
             for event in agent.analyze(prep_result, media_path=str(file_path), generate_explanation=False):
                 if event.event_type == "tool_complete":
                     t_name = event.tool_name or "?"
-                    t_score = event.data.get("score", "?")
+                    t_score = event.data.get("real_prob", "?")
                     t_ok = event.data.get("success", False)
                     t_err = event.data.get("error_msg", None)
-                    status = f"score={t_score:.3f}" if isinstance(t_score, float) else f"score={t_score}"
+                    status = f"real_prob={t_score:.3f}" if isinstance(t_score, float) else f"real_prob={t_score}"
                     if not t_ok:
                         status += f" ERROR: {t_err}"
                     print(f"    [{t_name}] {status}", flush=True)
                 if event.event_type == "verdict":
                     final_verdict = event.data.get("verdict")
-                    final_score = event.data.get("score")
+                    final_score = event.data.get("real_prob")
             
             # Label 1 = Fake, Label 0 = Real
             predicted_label = 1 if final_verdict == "FAKE" else 0

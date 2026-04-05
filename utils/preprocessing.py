@@ -318,10 +318,10 @@ class Preprocessor:
         for face_landmarks in results.multi_face_landmarks:
             coords = np.zeros((478, 2), dtype=np.float32)
             for i, lm in enumerate(face_landmarks.landmark):
-                coords[i] = [lm.x * w, lm.y * h]
+                coords[i] = [lm.x, lm.y]
                 
             # Count in-bounds landmarks (require ≥100 to avoid junk detection)
-            in_bounds = sum(1 for node in coords if 0 <= node[0] < w and 0 <= node[1] < h)
+            in_bounds = sum(1 for node in coords if 0 <= node[0] <= 1.0 and 0 <= node[1] <= 1.0)
             if in_bounds >= 100:
                 x_min, y_min = np.min(coords, axis=0)
                 x_max, y_max = np.max(coords, axis=0)
@@ -335,8 +335,8 @@ class Preprocessor:
         
     def _crop_align(self, image: np.ndarray, landmarks: np.ndarray, size: int) -> np.ndarray:
         h, w = image.shape[:2]
-        x_min, y_min = np.min(landmarks, axis=0)
-        x_max, y_max = np.max(landmarks, axis=0)
+        x_min, y_min = np.min(landmarks[:, 0]) * w, np.min(landmarks[:, 1]) * h
+        x_max, y_max = np.max(landmarks[:, 0]) * w, np.max(landmarks[:, 1]) * h
         
         box_w = x_max - x_min
         box_h = y_max - y_min
@@ -353,7 +353,8 @@ class Preprocessor:
         if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
             return np.zeros((size, size, 3), dtype=np.uint8)
             
-        return cv2.resize(crop, (size, size), interpolation=cv2.INTER_LANCZOS4)
+        interp = cv2.INTER_AREA if (crop.shape[0] > size and crop.shape[1] > size) else cv2.INTER_CUBIC
+        return cv2.resize(crop, (size, size), interpolation=interp)
         
     def _extract_native_patches(self, image: np.ndarray, landmarks: np.ndarray) -> Tuple:
         h, w = image.shape[:2]
@@ -372,8 +373,9 @@ class Preprocessor:
         results = {}
         for name, nodes in patches_def.items():
             pts = landmarks[nodes]
-            x_min, y_min = np.min(pts, axis=0)
-            x_max, y_max = np.max(pts, axis=0)
+            # Convert normalized to pixels for cropping
+            x_min, y_min = np.min(pts[:, 0]) * w, np.min(pts[:, 1]) * h
+            x_max, y_max = np.max(pts[:, 0]) * w, np.max(pts[:, 1]) * h
             
             box_w = x_max - x_min
             box_h = y_max - y_min
@@ -390,7 +392,8 @@ class Preprocessor:
             if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
                 results[name] = np.zeros((size, size, 3), dtype=np.uint8)
             else:
-                results[name] = cv2.resize(crop, (size, size), interpolation=cv2.INTER_LANCZOS4)
+                interp = cv2.INTER_AREA if (crop.shape[0] > size and crop.shape[1] > size) else cv2.INTER_CUBIC
+                results[name] = cv2.resize(crop, (size, size), interpolation=interp)
                 
         return (
             results["left_periorbital"],
@@ -477,9 +480,13 @@ class Preprocessor:
                     dets = []
                     
                     if lm_list:
+                        frame_h, frame_w = frame.shape[:2]
                         for lm in lm_list:
-                            x_min, y_min = np.min(lm, axis=0)
-                            x_max, y_max = np.max(lm, axis=0)
+                            x_min = np.min(lm[:, 0]) * frame_w
+                            y_min = np.min(lm[:, 1]) * frame_h
+                            x_max = np.max(lm[:, 0]) * frame_w
+                            y_max = np.max(lm[:, 1]) * frame_h
+                            
                             w = x_max - x_min
                             h = y_max - y_min
                             if w >= min_res and h >= min_res:
@@ -487,8 +494,10 @@ class Preprocessor:
                                 
                         if not dets and lm_list:
                             largest_lm = lm_list[0]
-                            x_min, y_min = np.min(largest_lm, axis=0)
-                            x_max, y_max = np.max(largest_lm, axis=0)
+                            x_min = np.min(largest_lm[:, 0]) * frame_w
+                            y_min = np.min(largest_lm[:, 1]) * frame_h
+                            x_max = np.max(largest_lm[:, 0]) * frame_w
+                            y_max = np.max(largest_lm[:, 1]) * frame_h
                             dets.append([x_min, y_min, x_max, y_max])
                             
                     dets = np.array(dets) if dets else np.empty((0, 4))
@@ -590,9 +599,12 @@ class Preprocessor:
                     best_iou = -1.0
                     matched_lm = final_lms[0]
                     
+                    frame_h, frame_w = target_image.shape[:2]
                     for lm in final_lms:
-                        x_min, y_min = np.min(lm, axis=0)
-                        x_max, y_max = np.max(lm, axis=0)
+                        x_min = np.min(lm[:, 0]) * frame_w
+                        y_min = np.min(lm[:, 1]) * frame_h
+                        x_max = np.max(lm[:, 0]) * frame_w
+                        y_max = np.max(lm[:, 1]) * frame_h
                         iou = compute_iou(trk_box, (x_min, y_min, x_max, y_max))
                         if iou > best_iou:
                             best_iou = iou
@@ -670,9 +682,12 @@ class Preprocessor:
                     return result
                     
                 result.has_face = True
+                h, w = image.shape[:2]
                 for i, lm in enumerate(final_landmarks_list):
-                    x_min, y_min = np.min(lm, axis=0)
-                    x_max, y_max = np.max(lm, axis=0)
+                    x_min = np.min(lm[:, 0]) * w
+                    y_min = np.min(lm[:, 1]) * h
+                    x_max = np.max(lm[:, 0]) * w
+                    y_max = np.max(lm[:, 1]) * h
                     
                     track_obj = TrackedFace(
                         identity_id=i+1,

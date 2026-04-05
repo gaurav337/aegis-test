@@ -333,7 +333,7 @@ class ToolRegistry:
             return ToolResult(
                 tool_name=name,
                 success=False,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 error=True,
                 error_msg=f"Tool '{name}' not registered.",
@@ -346,7 +346,7 @@ class ToolRegistry:
             return ToolResult(
                 tool_name=name,
                 success=False,
-                score=0.5,
+                real_prob=0.5,
                 confidence=0.0,
                 details={"error_category": "CIRCUIT_BREAKER"},
                 error=True,
@@ -387,7 +387,7 @@ class ToolRegistry:
                     return ToolResult(
                         tool_name=name,
                         success=False,
-                        score=0.5,
+                        real_prob=0.5,
                         confidence=0.1 if "Memory" in str(e) else 0.0,
                         details={"error_category": "EXECUTION_FAILURE"},
                         error=True,

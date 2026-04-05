@@ -24,12 +24,12 @@ FALLBACK_FPS = 30.0
 # ENSEMBLE WEIGHTS (Corrected to sum exactly to 1.0)
 # =============================================================================
 # AUDIT FIX C-03: Removed duplicate WEIGHT_SIGLIP alias, rebalanced to 1.0
-WEIGHT_UNIVFD = 0.09
-WEIGHT_XCEPTION = 0.25
-WEIGHT_SBI = 0.20
-WEIGHT_FREQNET = 0.05
+WEIGHT_UNIVFD = 0.15
+WEIGHT_XCEPTION = 0.15
+WEIGHT_SBI = 0.15
+WEIGHT_FREQNET = 0.15
 WEIGHT_RPPG = 0.06
-WEIGHT_DCT = 0.10
+WEIGHT_DCT = 0.09
 WEIGHT_GEOMETRY = 0.12
 WEIGHT_ILLUMINATION = 0.04
 WEIGHT_CORNEAL = 0.04
@@ -60,16 +60,20 @@ assert abs(sum(_ALL_WEIGHTS) - 1.0) < 1e-6, (
 # =============================================================================
 REAL_THRESHOLD = 0.15
 FAKE_THRESHOLD = 0.85
-ENSEMBLE_REAL_THRESHOLD = 0.50
+ENSEMBLE_REAL_THRESHOLD = 0.42
 ENSEMBLE_FAKE_THRESHOLD = 0.60
 ENSEMBLE_INCONCLUSIVE_WEIGHT = 0.50
+LOGIT_DAMPING_FACTOR = 0.45
+NEUTRAL_DEADZONE_LOW = 0.42
+NEUTRAL_DEADZONE_HIGH = 0.58
+NEUTRAL_DEADZONE_CONFIDENCE_MIN = 0.85
 
 # Borderline Consensus (AUDIT FIX S-02: widened to prevent fake bias)
 BORDERLINE_CONSENSUS_LOW = 0.35
 BORDERLINE_CONSENSUS_HIGH = 0.55
-BORDERLINE_CONSENSUS_BOOST = 1.05  # Reduced from 1.10 to prevent over-penalizing
+BORDERLINE_CONSENSUS_BOOST = 1.00  # Neutral: adaptive damping handles uncertainty now
 GPU_COVERAGE_DEGRADATION_FACTOR = (
-    0.03  # Reduced from 0.05 to limit structural abstention bias
+    0.02  # Halved: tools no longer fully abstain from borderline
 )
 
 # =============================================================================
@@ -244,6 +248,17 @@ C2PA_CACHE_EXPIRY_SECONDS = 3600
 # =============================================================================
 # ENSEMBLE CONFLICT DETECTION
 # =============================================================================
+# Specialist Dominance (AUDIT FIX S-16: GPU tool priority)
+ENSEMBLE_SPECIALIST_DOMINANCE_FACTOR = 2.5
+ENSEMBLE_SPECIALIST_MIN_CONFIDENCE = 0.40
+ENSEMBLE_SPECIALIST_FAKE_THRESHOLD = 0.50
+GPU_SINGLE_DETECT_HIGH_CONFIDENCE = 0.80
+GPU_MULTI_DETECT_MIN_CONFIDENCE = 0.55
+GPU_SINGLE_DETECT_BOOST = 0.12
+GPU_MULTI_DETECT_BOOST = 0.10
+CPU_SUPPORT_WHEN_GPU_AVAILABLE = 0.15
+
+# Conflict & Smoothing
 CONFLICT_STD_THRESHOLD = 0.20
 SUSPICION_OVERRIDE_THRESHOLD = 0.90
 OVERRIDE_AGREEMENT_THRESHOLD = 0.80
@@ -254,7 +269,7 @@ EMA_SMOOTHING_ENABLED = True
 # =============================================================================
 # ENCORE CORROBORATION (NEAR-MISS) THRESHOLDS
 # =============================================================================
-ENCORE_NEAR_MISS_THRESHOLD = 0.35
+ENCORE_NEAR_MISS_THRESHOLD = 0.42
 ENCORE_CORROBORATION_SENSITIVITY = 0.50  # Partial mass for near-miss suspects
 
 # =============================================================================

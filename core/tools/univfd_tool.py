@@ -217,14 +217,14 @@ class UnivFDTool(BaseForensicTool):
                 logger.warning(f"UnivFD: Raw load failed: {e}")
 
         if not pil_crops:
-            return ToolResult(tool_name=self.tool_name, success=False, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=False, real_prob=0.5, confidence=0.0,
                               error=True, error_msg="No image data", execution_time=0.0,
                               evidence_summary="UnivFD skipped: No image data available.")
 
         all_logits = []
         with VRAMLifecycleManager(self._load_model) as wrapper:
             if not self._weights_loaded_ok:
-                return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+                return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                                   details={"weights_loaded_ok": False, "execution_time": 0.0},
                                   execution_time=0.0, evidence_summary="Model weights missing.")
 
@@ -250,21 +250,22 @@ class UnivFDTool(BaseForensicTool):
 
         # Calibrate & take worst-case face
         scores = [self._calibrate_score(l, base_temp) for l in all_logits]
-        worst_score = max(scores) if scores else 0.0
-        confidence = self._compute_confidence(worst_score, base_threshold)
+        worst_fake_prob = max(scores) if scores else 0.0
+        worst_real_prob = 1.0 - worst_fake_prob
+        confidence = self._compute_confidence(worst_fake_prob, base_threshold)
 
         # Evidence summary
-        if worst_score > base_threshold:
+        if worst_fake_prob > base_threshold:
             summary = (f"UnivFD detected generative AI signatures "
-                       f"(Authenticity: {1.0 - worst_score:.2f}, "
+                       f"(Authenticity: {worst_real_prob:.2f}, "
                        f"{'phone-calibrated' if is_phone else 'standard'} threshold: {base_threshold:.2f}).")
         else:
-            summary = f"UnivFD found no reliable generative AI signatures (Authenticity: {1.0 - worst_score:.2f})."
-            if is_phone and worst_score > self.fake_threshold:
+            summary = f"UnivFD found no reliable generative AI signatures (Authenticity: {worst_real_prob:.2f})."
+            if is_phone and worst_fake_prob > self.fake_threshold:
                 summary += f" Score exceeds standard ({self.fake_threshold:.2f}) but below phone threshold ({base_threshold:.2f})."
 
         return ToolResult(
-            tool_name=self.tool_name, success=True, score=round(worst_score, 4),
+            tool_name=self.tool_name, success=True, real_prob=round(worst_real_prob, 4),
             confidence=round(confidence, 4),
             details={"raw_logits": [round(l, 4) for l in all_logits], "temperature": base_temp,
                      "is_phone_origin": is_phone, "phone_trust": round(phone_trust, 2),

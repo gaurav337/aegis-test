@@ -176,7 +176,7 @@ document.addEventListener("DOMContentLoaded", () => {
                                 statusClass = "status-warning";
                                 statusText = "ABSTAINED";
                             } else {
-                                const realProb = 1.0 - res.score;
+                                const realProb = res.real_prob;
                                 const isRisk = realProb < 0.50;
                                 statusClass = isRisk ? "status-invalid" : "status-valid";
                                 statusText = isRisk ? "SUSPICIOUS" : "CLEAR";
@@ -193,7 +193,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             </div>`;
                         
                         if (res.success) {
-                            const realProb = 1.0 - res.score;
+                            const realProb = res.real_prob;
                             if (res.confidence > 0) {
                                 cardInner += `
                                 <div class="tool-metrics">
@@ -244,7 +244,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         const finalScoreText = document.getElementById("final-score");
                         // Note: explanationText already fully populated by llm_stream events above
                         // Only update score and banner here
-                        const scorePercent = ((finalDoc.score || 0) * 100).toFixed(1);
+                        const scorePercent = ((finalDoc.real_prob || 0) * 100).toFixed(1);
                         finalScoreText.textContent = `${scorePercent}%`;
                         
                         // If somehow llm_stream wasn't used (C2PA short-circuit path), show explanation now

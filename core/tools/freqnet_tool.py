@@ -197,11 +197,11 @@ class FreqNetTool(BaseForensicTool):
                 except Exception: pass
 
         if not np_crops:
-            return ToolResult(tool_name=self.tool_name, success=False, score=0.0, confidence=0.0, details={}, error=True, error_msg="No image data", execution_time=0.0, evidence_summary="No image data available.")
+            return ToolResult(tool_name=self.tool_name, success=False, real_prob=0.5, confidence=0.0, details={}, error=True, error_msg="No image data", execution_time=0.0, evidence_summary="No image data available.")
 
         spatial_prep = SpatialPreprocessor()
         dct_prep = DCTPreprocessor()
-        worst_face_score, best_fad, best_band, all_neural, all_fad = 0.0, 0.0, 0.0, [], []
+        worst_face_fake_prob, best_fad, best_band, all_neural, all_fad = 0.0, 0.0, 0.0, [], []
 
         try:
             from utils.thresholds import FREQNET_FAKE_THRESHOLD
@@ -254,22 +254,23 @@ class FreqNetTool(BaseForensicTool):
                     # FAD-only mode: highly conservative, requires strong spectral evidence
                     final_score = median_fad if median_fad > 0.45 else 0.0
 
-                if final_score > worst_face_score:
-                    worst_face_score = final_score
+                if final_score > worst_face_fake_prob:
+                    worst_face_fake_prob = final_score
                     best_fad = median_fad
                     best_band = band
 
-        confidence = self._calibrate_confidence(worst_face_score, best_fad, self._weights_loaded_ok)
+        worst_face_real_prob = 1.0 - worst_face_fake_prob
+        confidence = self._calibrate_confidence(worst_face_fake_prob, best_fad, self._weights_loaded_ok)
         execution_time = time.time() - start_time
 
-        if worst_face_score > fake_threshold:
+        if worst_face_fake_prob > fake_threshold:
             anomaly = getattr(best_band, "interpretation", "Spectral trace detected") if best_band else "Pattern matched"
-            summary = f"FreqNet detected high-frequency spatial artifacts ({anomaly}). Authenticity: {1.0 - worst_face_score:.2f}."
+            summary = f"FreqNet detected high-frequency spatial artifacts ({anomaly}). Authenticity: {worst_face_real_prob:.2f}."
         else:
-            summary = f"FreqNet analysis showed normal frequency energy distribution (Authenticity: {1.0 - worst_face_score:.2f})."
+            summary = f"FreqNet analysis showed normal frequency energy distribution (Authenticity: {worst_face_real_prob:.2f})."
 
         return ToolResult(
-            tool_name=self.tool_name, success=True, score=float(worst_face_score),
+            tool_name=self.tool_name, success=True, real_prob=float(worst_face_real_prob),
             confidence=float(confidence),
             details={
                 "neural_score_contribution": float(np.mean(all_neural)) if all_neural else 0.0,

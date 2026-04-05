@@ -70,20 +70,15 @@ class DiskBackedFrameList:
 
 logger = setup_logger(__name__)
 
-# Attempt to import torchcodec and torch for hardware-accelerated video decoding
+# Attempt to import torchcodec for hardware-accelerated video decoding
 TORCHCODEC_AVAILABLE = False
 try:
     import torch
     from torchcodec.decoders import VideoDecoder
 
     TORCHCODEC_AVAILABLE = True
-except Exception as e:
-    logger.warning(
-        f"Failed to load torchcodec: {e}. Falling back to OpenCV CPU decode."
-    )
-    # torch might still be available even if torchcodec fails
-    import torch
-
+except (ImportError, Exception):
+    # torchcodec is optional, fallback to OpenCV is standard
     TORCHCODEC_AVAILABLE = False
 
 # Known valid video extensions

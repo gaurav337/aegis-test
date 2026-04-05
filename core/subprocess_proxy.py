@@ -85,7 +85,7 @@ class SubprocessToolProxy(BaseForensicTool):
                 return ToolResult(
                     tool_name=self.tool_name,
                     success=False,
-                    score=0.0,
+                    real_prob=0.5,
                     confidence=0.0,
                     details={"stderr": result.stderr},
                     error=True,
@@ -98,7 +98,7 @@ class SubprocessToolProxy(BaseForensicTool):
                 return ToolResult(
                     tool_name=self.tool_name,
                     success=False,
-                    score=0.0,
+                    real_prob=0.5,
                     confidence=0.0,
                     details={"stdout": result.stdout, "stderr": result.stderr},
                     error=True,
@@ -115,7 +115,7 @@ class SubprocessToolProxy(BaseForensicTool):
                 return ToolResult(
                     tool_name=self.tool_name,
                     success=False,
-                    score=0.0,
+                    real_prob=0.5,
                     confidence=0.0,
                     details={},
                     error=True,
@@ -131,7 +131,7 @@ class SubprocessToolProxy(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={},
                 error=True,
@@ -144,7 +144,7 @@ class SubprocessToolProxy(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={},
                 error=True,

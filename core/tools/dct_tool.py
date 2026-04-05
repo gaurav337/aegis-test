@@ -314,7 +314,7 @@ class DCTTool(BaseForensicTool):
         return ToolResult(
             tool_name=self.tool_name,
             success=True,
-            score=0.0,
+            real_prob=0.5,
             confidence=0.0,
             details={"grid_artifacts": False},
             error=False,
@@ -429,7 +429,7 @@ class DCTTool(BaseForensicTool):
         return ToolResult(
             tool_name=self.tool_name,
             success=True,
-            score=float(score),
+            real_prob=float(1.0 - score),
             confidence=float(confidence),
             details={
                 "grid_artifacts": grid_artifacts,

@@ -70,15 +70,7 @@ class GeometryTool(BaseForensicTool):
 
     # ─── FIX 1 & M-03: Landmark Coordinate Normalization ───
     def _normalize_landmarks(self, lm: np.ndarray) -> np.ndarray:
-        """Ensure landmarks are consistently normalized [0,1] relative to crop."""
-        if lm.max() > 1.0:
-            # Pixel coordinates detected — normalize to [0,1]
-            h, w = lm.max(axis=0)
-            if h > 0 and w > 0:
-                lm = lm.copy()
-                lm[:, 0] /= w
-                lm[:, 1] /= h
-                logger.debug("Geometry: Normalized pixel landmarks to [0,1]")
+        """Landmarks are now guaranteed to be normalized [0,1] by the Preprocessor."""
         return lm
 
     # ─── FIX 4: Roll Estimation ───
@@ -192,8 +184,16 @@ class GeometryTool(BaseForensicTool):
     def _run_inference(self, input_data: Dict[str, Any]) -> ToolResult:
         start_time = time.time()
         tracked_faces = input_data.get("tracked_faces", [])
+        first_frame = input_data.get("first_frame")
+        
+        # Get frame size for aspect-ratio fairness (M-03 Correction)
+        if first_frame is not None:
+            f_h, f_w = first_frame.shape[:2]
+        else:
+            f_h, f_w = 1.0, 1.0 # Fallback to normalized space if frame missing
+        
         if not tracked_faces:
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"geometry_score": 0.0, "faces_analyzed": 0},
                               execution_time=time.time()-start_time, evidence_summary="No tracked faces provided.")
 
@@ -203,8 +203,14 @@ class GeometryTool(BaseForensicTool):
             lm_raw = face.get("landmarks")
             if face_crop is None or lm_raw is None: continue
             
-            landmarks = self._normalize_landmarks(np.array(lm_raw, dtype=np.float32))
-            if landmarks.shape[0] < 478: continue
+            # --- FAIRNESS FIX: Perform ALL calculations in Pixel Space ---
+            # This ensures that Face Width, IPD, and Vertical Thirds are invariant to Aspect Ratio.
+            landmarks_norm = np.array(lm_raw, dtype=np.float32)
+            if landmarks_norm.shape[0] < 478: continue
+            
+            landmarks = landmarks_norm.copy()
+            landmarks[:, 0] *= f_w
+            landmarks[:, 1] *= f_h
 
             face_width = self._get_stable_face_width(landmarks)
             ipd = self._dist(landmarks[468], landmarks[473])
@@ -260,7 +266,7 @@ class GeometryTool(BaseForensicTool):
             })
 
         if not face_results:
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"geometry_score": 0.0, "faces_analyzed": 0},
                               execution_time=time.time()-start_time, evidence_summary="No valid landmarks found.")
 
@@ -281,8 +287,10 @@ class GeometryTool(BaseForensicTool):
             summary = (f"Significant anatomical violations (ID {median_face['identity_id']}): {viol_str}. "
                        f"Geometry deviates from human anatomical baseline (Score: {median_score:.2f}).")
 
+        real_prob = 1.0 - float(median_score)
+
         return ToolResult(
-            tool_name=self.tool_name, success=True, score=float(median_score),
+            tool_name=self.tool_name, success=True, real_prob=real_prob,
             confidence=float(median_face["confidence"]),
             details={
                 "geometry_score": median_score, "violations": median_face["violations"],

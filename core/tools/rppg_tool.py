@@ -217,11 +217,11 @@ class RPPGTool(BaseForensicTool):
         signals = [h_forehead, h_left, h_right]
 
         if hair_occluded:
-            return {"label": "AMBIGUOUS", "score": 0.0, "confidence": 0.0,
+            return {"label": "AMBIGUOUS", "real_prob": 0.5, "confidence": 0.0,
                     "interpretation": "rPPG abstained: Forehead ROI frequently occluded by hair. Blood flow signal cannot be reliably extracted."}
 
         if motion_contaminated:
-            return {"label": "AMBIGUOUS", "score": 0.0, "confidence": 0.0,
+            return {"label": "AMBIGUOUS", "real_prob": 0.5, "confidence": 0.0,
                     "interpretation": "rPPG abstained: Signal contaminated by head motion. Cardiac pulse cannot be reliably distinguished from motion artifacts."}
 
         all_flat = all(np.std(s) < 1e-5 for s in signals)
@@ -232,7 +232,7 @@ class RPPGTool(BaseForensicTool):
                 # Clear signal present, but zero pulse → AI/Synthetic video
                 return {
                     "label": "SYNTHETIC_FLATLINE",
-                    "score": 0.65,  # Strong fake signal
+                    "real_prob": 0.35,  # Strong fake signal mapped to lower authenticity
                     "confidence": min(0.8, max_std * 12.0),
                     "interpretation": (
                         "Biological liveness FAILED: High-quality temporal signal detected but no cardiac pulse found. "
@@ -242,14 +242,14 @@ class RPPGTool(BaseForensicTool):
             # Low variance → poor lighting/static → abstain
             return {
                 "label": "NO_PULSE",
-                "score": 0.0,
+                "real_prob": 0.5,
                 "confidence": 0.0,
                 "interpretation": "Biological liveness inconclusive: All facial regions show minimal temporal variation. Insufficient evidence for a liveness judgment.",
             }
 
         analyzable_count = sum(1 for s in quality_stds if s >= RPPG_MIN_TEMPORAL_STD)
         if analyzable_count < 2:
-            return {"label": "AMBIGUOUS", "score": 0.0, "confidence": 0.0,
+            return {"label": "AMBIGUOUS", "real_prob": 0.5, "confidence": 0.0,
                     "interpretation": f"rPPG abstained: Only {analyzable_count}/3 facial regions have sufficient temporal variance for analysis."}
 
         metrics = [self._calculate_signal_metrics(s) for s in signals]
@@ -264,12 +264,12 @@ class RPPGTool(BaseForensicTool):
 
         if n_good == 0:
             max_snr = max(m["snr_db"] for m in metrics)
-            return {"label": "AMBIGUOUS", "score": 0.0, "confidence": 0.0,
+            return {"label": "AMBIGUOUS", "real_prob": 0.5, "confidence": 0.0,
                     "interpretation": f"rPPG abstained: No cardiac peak detected with sufficient SNR in any facial region (max SNR: {max_snr:.1f} dB)."}
 
         if n_good == 1:
             good_idx = good_mask.index(True)
-            return {"label": "AMBIGUOUS", "score": 0.0, "confidence": 0.0,
+            return {"label": "AMBIGUOUS", "real_prob": 0.5, "confidence": 0.0,
                     "interpretation": f"rPPG abstained: Only {roi_labels[good_idx]} yielded a usable signal. Multi-region coherence required."}
 
         good_indices = [i for i, g in enumerate(good_mask) if g]
@@ -277,7 +277,7 @@ class RPPGTool(BaseForensicTool):
         plausible_peaks = [p for p in good_peaks if (RPPG_HEART_RATE_MIN / 60.0) <= p <= (RPPG_HEART_RATE_MAX / 60.0)]
 
         if not plausible_peaks:
-            return {"label": "AMBIGUOUS", "score": 0.0, "confidence": 0.0,
+            return {"label": "AMBIGUOUS", "real_prob": 0.5, "confidence": 0.0,
                     "interpretation": f"rPPG abstained: Detected peaks outside plausible heart rate range ({RPPG_HEART_RATE_MIN}-{RPPG_HEART_RATE_MAX} BPM)."}
 
         best_pair = None
@@ -294,11 +294,11 @@ class RPPGTool(BaseForensicTool):
             n_coherent = sum(1 for i in good_indices if abs(metrics[i]["peak_hz"] - pair_avg_hz) <= RPPG_COHERENCE_THRESHOLD_HZ)
             avg_bpm = pair_avg_hz * 60
             conf = 0.95 if n_coherent >= 3 else (0.70 if n_coherent == 2 else 0.50)
-            return {"label": "PULSE_PRESENT", "score": 0.0, "confidence": conf,
+            return {"label": "PULSE_PRESENT", "real_prob": 0.95, "confidence": conf,
                     "interpretation": f"Biological liveness confirmed: Synchronous cardiac pulse detected across {n_coherent}/3 facial regions at ~{avg_bpm:.0f} BPM."}
 
         conf = 0.60 if n_good == 3 else 0.40
-        return {"label": "AMBIGUOUS", "score": 0.0, "confidence": conf,
+        return {"label": "AMBIGUOUS", "real_prob": 0.5, "confidence": conf,
                 "interpretation": f"rPPG abstained: Pulse frequencies vary across facial regions (best pair spread: {best_pair_diff * 60:.1f} BPM)."}
 
     # ─── FIX 6: Removed dead-end lightweight face check ───
@@ -306,13 +306,13 @@ class RPPGTool(BaseForensicTool):
         start_time = time.time()
         media_type = input_data.get("original_media_type", "unknown")
         if media_type == "image":
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"liveness_label": "SKIPPED", "reason": "Static image"},
                               error=False, error_msg=None, execution_time=time.time() - start_time,
                               evidence_summary="rPPG skipped: Static image has no temporal signal.")
 
         if "frames_30fps" not in input_data or "tracked_faces" not in input_data:
-            return ToolResult(tool_name=self.tool_name, success=False, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=False, real_prob=0.5, confidence=0.0,
                               details={"liveness_label": "ERROR"}, error=True,
                               error_msg="Missing 'frames_30fps' or 'tracked_faces' in input_data",
                               execution_time=time.time() - start_time, evidence_summary="Missing required input data.")
@@ -321,13 +321,13 @@ class RPPGTool(BaseForensicTool):
         tracked_faces = input_data.get("tracked_faces", [])
 
         if len(frames) < RPPG_MIN_FRAMES:
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"liveness_label": "ABSTAIN", "reason": "INSUFFICIENT_TEMPORAL_DATA"},
                               error=False, error_msg=None, execution_time=time.time() - start_time,
                               evidence_summary=f"rPPG skipped: insufficient frames ({len(frames)} < {RPPG_MIN_FRAMES}) for rPPG analysis.")
 
         if not tracked_faces:
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"liveness_label": "ABSTAIN", "reason": "NO_TRACKED_FACES"},
                               error=False, error_msg=None, execution_time=time.time() - start_time,
                               evidence_summary="rPPG abstained: No tracked faces available for analysis.")
@@ -345,7 +345,7 @@ class RPPGTool(BaseForensicTool):
                 target_frames = frames[start_offset:end_frame]
                 sliced_trajectory = {k - start_offset: v for k, v in trajectory.items() if start_offset <= k < end_frame}
             else:
-                face_results.append({"score": 0.0, "confidence": 0.0, "label": "ABSTAIN",
+                face_results.append({"real_prob": 0.5, "confidence": 0.0, "label": "ABSTAIN",
                                      "interpretation": "Face window could not be established.", "metrics": {}})
                 continue
 
@@ -355,7 +355,7 @@ class RPPGTool(BaseForensicTool):
 
             if h_forehead is None or h_left is None or h_right is None:
                 label = "OCCLUDED" if (hair_f or hair_l or hair_r) else "TRACKING_FAILED"
-                face_results.append({"score": 0.0, "confidence": 0.0, "label": "ABSTAIN",
+                face_results.append({"real_prob": 0.5, "confidence": 0.0, "label": "ABSTAIN",
                                      "interpretation": f"rPPG abstained: {label.replace('_', ' ').title()}. Cannot extract reliable biological signal.",
                                      "metrics": {}})
                 continue
@@ -363,12 +363,12 @@ class RPPGTool(BaseForensicTool):
             liveness = self._evaluate_liveness(h_forehead, h_left, h_right, quality_stds=[std_f, std_l, std_r],
                                                hair_occluded=hair_f, motion_contaminated=motion_f)
             metrics = [self._calculate_signal_metrics(s) for s in [h_forehead, h_left, h_right]]
-            face_results.append({"score": liveness["score"], "confidence": liveness["confidence"],
+            face_results.append({"real_prob": liveness["real_prob"], "confidence": liveness["confidence"],
                                  "label": liveness["label"], "interpretation": liveness["interpretation"],
                                  "metrics": {"forehead": metrics[0], "left_cheek": metrics[1], "right_cheek": metrics[2]}})
 
         if not face_results:
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"liveness_label": "NO_FACES"}, error=False, error_msg=None,
                               execution_time=time.time() - start_time,
                               evidence_summary="All tracked faces yielded ambiguous tracking or were occluded.")
@@ -378,6 +378,6 @@ class RPPGTool(BaseForensicTool):
                    "spectral_concentration": best["metrics"].get("forehead", {}).get("spectral_concentration", 0.0),
                    "faces_analyzed": len(face_results)}
 
-        return ToolResult(tool_name=self.tool_name, success=True, score=best["score"], confidence=best["confidence"],
+        return ToolResult(tool_name=self.tool_name, success=True, real_prob=best["real_prob"], confidence=best["confidence"],
                           details=details, error=False, error_msg=None, execution_time=time.time() - start_time,
                           evidence_summary=best["interpretation"])

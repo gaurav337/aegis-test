@@ -73,7 +73,7 @@ def evaluate():
             for event in agent.analyze(prep_result, media_path=str(file_path)):
                 if event.event_type == "verdict":
                     final_verdict = event.data.get("verdict")
-                    final_score = event.data.get("score")
+                    final_score = event.data.get("real_prob")
             
             # Label 1 = Fake, Label 0 = Real
             predicted_label = 1 if final_verdict == "FAKE" else 0

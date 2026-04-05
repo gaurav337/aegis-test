@@ -296,7 +296,7 @@ class CornealTool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=True,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={
                     "corneal_score": 0.0,
@@ -464,7 +464,7 @@ class CornealTool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=True,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={
                     "corneal_score": 0.0,
@@ -502,7 +502,7 @@ class CornealTool(BaseForensicTool):
         return ToolResult(
             tool_name=self.tool_name,
             success=True,
-            score=float(best_face["fake_score"]),
+            real_prob=float(1.0 - best_face["fake_score"]),
             confidence=float(best_face["confidence"]),
             details=details,
             error=False,

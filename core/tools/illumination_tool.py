@@ -205,13 +205,13 @@ class IlluminationTool(BaseForensicTool):
 
         # M-11: Evasion flag handling
         if {"GRAYSCALE", "HEAVY_BLUR", "CLIPPED_BLACK", "CLIPPED_WHITE"} & set(heuristic_flags):
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"abstention_reason": "evasion_flags"},
                               error=False, error_msg=None, execution_time=time.time()-start_time,
                               evidence_summary="Illumination analysis abstained: Evasion flags detected.")
 
         if not tracked_faces or not frames:
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"illumination_score": 0.0, "faces_analyzed": 0},
                               error=False, error_msg=None, execution_time=time.time()-start_time,
                               evidence_summary="Illumination analysis skipped: Missing faces/frames.")
@@ -306,7 +306,7 @@ class IlluminationTool(BaseForensicTool):
                                  "interpretation": interpretation})
 
         if not face_results:
-            return ToolResult(tool_name=self.tool_name, success=True, score=0.0, confidence=0.0,
+            return ToolResult(tool_name=self.tool_name, success=True, real_prob=0.5, confidence=0.0,
                               details={"illumination_score": 0.0, "faces_analyzed": 0},
                               error=False, error_msg=None, execution_time=time.time()-start_time,
                               evidence_summary="Illumination analysis skipped: No valid face crops found.")
@@ -321,7 +321,7 @@ class IlluminationTool(BaseForensicTool):
                    "face_angle": median_face.get("face_angle", 0), "ctx_angle": median_face.get("ctx_angle", 0),
                    "angular_diff": median_face.get("angular_diff", 0), "nose_shadow_side": median_face.get("nose_shadow_side")}
 
-        return ToolResult(tool_name=self.tool_name, success=True, score=float(median_face["fake_score"]),
+        return ToolResult(tool_name=self.tool_name, success=True, real_prob=float(1.0 - median_face["fake_score"]),
                           confidence=float(median_face["confidence"]), details=details,
                           error=False, error_msg=None, execution_time=time.time()-start_time,
                           evidence_summary=summary)

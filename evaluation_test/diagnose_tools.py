@@ -102,7 +102,7 @@ def main():
             result = run_tool_subprocess(tool_name, input_data)
             if result is None:
                 continue
-            print(f"  [{tool_name}] score={result.fake_score:.4f}, confidence={result.confidence:.2f}, "
+            print(f"  [{tool_name}] real_prob={result.real_prob:.4f}, confidence={result.confidence:.2f}, "
                   f"success={result.success}, error={result.error}")
             if result.error_msg:
                 print(f"    error_msg: {result.error_msg}")

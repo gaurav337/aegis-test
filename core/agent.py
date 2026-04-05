@@ -56,7 +56,7 @@ class ForensicAgent:
         return ToolResult(
             tool_name=tool_name,
             success=False,
-            score=0.5,
+            real_prob=0.5,
             confidence=0.0,
             details={"status": "ERROR", "error_msg": error_msg},
             error=True,
@@ -136,7 +136,7 @@ class ForensicAgent:
             self.ensemble.add_result(result)
             yield AgentEvent("tool_complete", tool_name, data={
                 "success": result.success,
-                "score": result.fake_score,
+                "real_prob": result.real_prob,
                 "confidence": result.confidence,
                 "evidence_summary": result.evidence_summary,
                 "error_msg": result.error_msg,
@@ -147,18 +147,18 @@ class ForensicAgent:
                 signer = result.details.get("signer", "Unknown")
                 
                 if is_ai:
-                    yield AgentEvent("EARLY_STOP", data={"reason": "C2PA_AI_GENERATED", "confidence": 1.0})
+                    yield AgentEvent("early_stop", data={"reason": "C2PA_AI_GENERATED", "confidence": 1.0})
                     yield AgentEvent("verdict", data={
                         "verdict": "FAKE",
-                        "score": 1.0,
+                        "real_prob": 0.0,
                         "explanation": f"C2PA Content Credentials detected. The cryptographically signed provenance data explicitly states this media was AI-generated (signed by: {signer}).",
                         "degraded": False
                     })
                 else:
-                    yield AgentEvent("EARLY_STOP", data={"reason": "C2PA_REAL_IMAGE", "confidence": 1.0})
+                    yield AgentEvent("early_stop", data={"reason": "C2PA_REAL_IMAGE", "confidence": 1.0})
                     yield AgentEvent("verdict", data={
                         "verdict": "REAL",
-                        "score": 1.0,
+                        "real_prob": 1.0,
                         "explanation": f"Cryptographically signed via C2PA Content Credentials, confirming authentic hardware capture (signed by: {signer}).",
                         "degraded": False
                     })
@@ -168,7 +168,7 @@ class ForensicAgent:
         # Calculate CPU phase confidence
         cpu_results = [r for name, r in self.ensemble.tool_results.items() if name in cpu_tools_to_run and r.success and not r.error and r.details.get("liveness_label") not in ("ABSTAIN", "ERROR")]
         
-        decisive_results = [r for r in cpu_results if abs(r.score - 0.5) > 0.15]
+        decisive_results = [r for r in cpu_results if abs(r.real_prob - 0.5) > 0.15]
         
         gate_decision = "FULL_GPU"
         unison_agreement = False
@@ -193,14 +193,15 @@ class ForensicAgent:
                 directional_scores = []
                 for r in decisive_results:
                     weight = normalized_weights[r.tool_name]
-                    direction = (r.score - 0.5) * 2
+                    # Positive means more fake-like; negative means more real-like.
+                    direction = (0.5 - r.real_prob) * 2
                     directional_scores.append(direction * r.confidence * weight)
                 agg_direction = sum(directional_scores)
                 agg_conf = abs(agg_direction)
             
             # Check unison agreement
-            first_dir = decisive_results[0].score > 0.5
-            unison = all((r.score > 0.5) == first_dir for r in decisive_results)
+            first_dir = decisive_results[0].real_prob < 0.5
+            unison = all((r.real_prob < 0.5) == first_dir for r in decisive_results)
             
             # Independent domains check
             domains = set()
@@ -253,7 +254,7 @@ class ForensicAgent:
                     self.ensemble.add_result(result)
                     yield AgentEvent("tool_complete", tool_name, data={
                         "success": result.success,
-                        "score": result.fake_score,
+                        "real_prob": result.real_prob,
                         "confidence": result.confidence,
                         "evidence_summary": result.evidence_summary,
                         "error_msg": result.error_msg,
@@ -261,11 +262,11 @@ class ForensicAgent:
                 except FuturesTimeoutError:
                     logger.error(f"Timeout executing {tool_name} after 90s")
                     self.ensemble.add_result(self._make_error_result(tool_name, "Timeout after 90s", start_time))
-                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "score": 0.5, "confidence": 0.0, "evidence_summary": "Tool timed out.", "error_msg": "Timeout after 90s"})
+                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "real_prob": 0.5, "confidence": 0.0, "evidence_summary": "Tool timed out.", "error_msg": "Timeout after 90s"})
                 except Exception as e:
                     logger.error(f"Error executing {tool_name}: {e}\n{traceback.format_exc()}")
                     self.ensemble.add_result(self._make_error_result(tool_name, str(e), start_time))
-                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "score": 0.5, "confidence": 0.0, "evidence_summary": "Tool failed.", "error_msg": str(e)})
+                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "real_prob": 0.5, "confidence": 0.0, "evidence_summary": "Tool failed.", "error_msg": str(e)})
 
         # Check DEGRADED status if >50% of mapped tools errored out
         is_degraded = False
@@ -292,14 +293,14 @@ class ForensicAgent:
             
         yield AgentEvent("verdict", data={
             "verdict": verdict_str,
-            "score": final_score,
+            "real_prob": final_score,
             "explanation": explanation,
             "degraded": is_degraded
         })
         
         return {
             "verdict": verdict_str,
-            "score": final_score,
+            "real_prob": final_score,
             "explanation": explanation,
             "degraded": is_degraded,
         }

@@ -222,55 +222,55 @@ class SBITool(BaseForensicTool):
         return model
 
     def _prepare_crop_and_landmarks(
-        self, face_image: np.ndarray, landmarks: np.ndarray, scale: float
+        self, face_image: np.ndarray, landmarks: np.ndarray, bbox: Tuple[int, int, int, int], orig_size: Tuple[int, int], scale: float
     ) -> Tuple[torch.Tensor, np.ndarray]:
         """
-        Extracts a scaled crop using BORDER_REFLECT (not black padding) and
-        applies the exact affine transformation to landmarks.
-
-        FIX 1: BORDER_REFLECT_101 extends existing image content instead of
-        introducing foreign black pixels that SBI mistakes for blending boundaries.
+        Extracts a scaled crop and maps global normalized landmarks to it.
+        bbox: (x1, y1, x2, y2) in original frame pixels.
+        orig_size: (width, height) of original frame.
         """
-        h, w, _ = face_image.shape
+        h, w, _ = face_image.shape  # This is the 380x380 crop
+        orig_w, orig_h = orig_size
+        bx1, by1, bx2, by2 = bbox
+        bw = bx2 - bx1
+        bh = by2 - by1
 
-        # 1. Exact Float Padding Calculation
+        # 1. Map Global Normalized -> Local 380x380 Pixels
+        # lx_px = landmarks[:, 0] * orig_w
+        # lx_local = (lx_px - bx1) * (380.0 / bw)
+        local_lms = np.zeros_like(landmarks)
+        local_lms[:, 0] = (landmarks[:, 0] * orig_w - bx1) * (380.0 / bw)
+        local_lms[:, 1] = (landmarks[:, 1] * orig_h - by1) * (380.0 / bh)
+
+        # 2. Apply Scale Padding (the 1.15x / 1.25x logic)
         pad_total_y = (h * scale) - h
         pad_total_x = (w * scale) - w
-
-        # Symmetrical split (handles odd totals correctly)
         pad_top = int(pad_total_y // 2)
-        pad_bottom = int(pad_total_y - pad_top)
         pad_left = int(pad_total_x // 2)
-        pad_right = int(pad_total_x - pad_left)
 
-        # FIX 1: Content-aware padding instead of black borders
+        # FIX 1: Content-aware padding
         if pad_top > 0 or pad_left > 0:
             face_image = cv2.copyMakeBorder(
                 face_image,
                 pad_top,
-                pad_bottom,
+                int(pad_total_y - pad_top),
                 pad_left,
-                pad_right,
-                cv2.BORDER_REFLECT_101,  # Reflects edge pixels, no artificial borders
+                int(pad_total_x - pad_left),
+                cv2.BORDER_REFLECT_101,
             )
 
         padded_h, padded_w, _ = face_image.shape
+        crop = cv2.resize(face_image, (380, 380), interpolation=cv2.INTER_AREA)
 
-        # 3. Resize to Target (380x380)
-        crop = cv2.resize(face_image, (380, 380), interpolation=cv2.INTER_LANCZOS4)
-
-        # 4. Exact Affine Transform for Landmarks
+        # 3. Final Coordinate Transform (due to padding + resize)
         scale_x = 380.0 / padded_w
         scale_y = 380.0 / padded_h
+        
+        transformed_landmarks = np.zeros_like(local_lms)
+        transformed_landmarks[:, 0] = (local_lms[:, 0] + pad_left) * scale_x
+        transformed_landmarks[:, 1] = (local_lms[:, 1] + pad_top) * scale_y
 
-        transformed_landmarks = np.zeros_like(landmarks)
-        transformed_landmarks[:, 0] = (landmarks[:, 0] * w + pad_left) * scale_x
-        transformed_landmarks[:, 1] = (landmarks[:, 1] * h + pad_top) * scale_y
-
-        # 4.5 Convert BGR to RGB (Critical for PyTorch pre-trained models)
         crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-
-        # 5. Tensor Conversion
         tensor = torch.from_numpy(crop_rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0
         tensor = self.normalize(tensor)
 
@@ -303,7 +303,7 @@ class SBITool(BaseForensicTool):
 
         try:
             output = model(input_tensor)
-            score = output[0, 0]  # Class 0 is FAKE in this checkpoint
+            score = output[0, 1]  # Class 1 is FAKE in this checkpoint
             model.zero_grad()
             score.backward()
 
@@ -418,12 +418,24 @@ class SBITool(BaseForensicTool):
                 has_adjacent_support = True
                 break
 
-        # FIX 4: If only nose_bridge is elevated, it's likely glasses — not a blend boundary
-        if len(elevated_regions) == 1 and best_region == "nose_bridge":
-            return False, "nose_bridge_single", best_score
+        # FIX 4: If nose_bridge is the primary elevated region, it's almost always glasses/shadows — not a blend boundary.
+        # We explicitly reject nose_bridge as a valid face-swap perimeter. Deepfakes blend at the edges (jaw, hairline).
+        if best_region == "nose_bridge":
+            return False, "nose_bridge_glasses_reflection", best_score
 
-        # Require adjacent support OR the region is a known blending boundary region
-        if has_adjacent_support or best_region in BLENDING_BOUNDARY_REGIONS:
+        # FIX 4: Real face-swaps have continuous blending boundaries spanning multiple regions.
+        # An isolated hot spot on a single cheek is usually a lighting shadow, mole, or blush.
+        # A true blend mask spans across adjacent regions to conceal the entire pasted face.
+        
+        if len(elevated_regions) == 1:
+            # If only a SINGLE massive boundary region (like the entire sweeping jaw or the entire hairline) 
+            # is absolutely on fire (very high score), we can consider it a valid boundary.
+            # But an isolated small region like a single cheek ('cheek_r') is a definitive false positive.
+            if best_region in ["jaw", "hairline"] and best_score > (SBI_GRADCAM_REGION_THRESHOLD + 0.15):
+                return True, best_region, best_score
+            return False, f"isolated_{best_region}_false_positive", best_score
+
+        if has_adjacent_support:
             return True, best_region, best_score
 
         return False, "diffuse", best_score
@@ -454,7 +466,7 @@ class SBITool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=True,
-                score=0.0,
+                real_prob=0.0,
                 confidence=1.0,
                 details={"skipped": True, "reason": "visual_score_high"},
                 error=False,
@@ -472,7 +484,7 @@ class SBITool(BaseForensicTool):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=0.0,
+                real_prob=0.5,
                 confidence=0.0,
                 details={},
                 error=True,
@@ -486,7 +498,7 @@ class SBITool(BaseForensicTool):
                 return ToolResult(
                     tool_name=self.tool_name,
                     success=True,
-                    score=0.0,
+                    real_prob=0.5,
                     confidence=0.0,
                     details={"execution_time": time.time() - start_time},
                     error=False,
@@ -501,10 +513,10 @@ class SBITool(BaseForensicTool):
                 else torch.device("cpu")
             )
 
-            best_score = 0.0
+            worst_real_prob = 1.0
             best_boundary_region = None
             best_scale = None
-            scores_per_scale = {"1.15x": 0.0, "1.25x": 0.0}
+            scores_per_scale = {"1.15x": 1.0, "1.25x": 1.0}
             boundary_detected = False
             per_face_details = []  # FIX M-06: Collect details per face, return in result
 
@@ -518,28 +530,22 @@ class SBITool(BaseForensicTool):
                 if isinstance(landmarks, list):
                     landmarks = np.array(landmarks)
 
-                # FIX 6: Improved landmark coordinate validation
-                if landmarks.max() > 1.0:
-                    if landmarks.max() <= 380.0:
-                        logger.warning(
-                            f"SBI: Landmarks in pixel coords (max={landmarks.max():.0f}). "
-                            f"Normalizing by 380."
-                        )
-                        landmarks = landmarks / 380.0
-                    else:
-                        logger.warning(
-                            f"SBI: Landmarks likely in frame coords (max={landmarks.max():.0f}). "
-                            f"Cannot safely transform without frame size — clamping to [0,1]. "
-                            f"GradCAM region mapping may be inaccurate."
-                        )
-                        landmarks = np.clip(landmarks / landmarks.max(), 0, 1)
+                # Get original frame context for coordinate mapping
+                best_idx = getattr(face, "best_frame_idx", 0)
+                bbox = face.trajectory_bboxes.get(best_idx)
+                if not bbox:
+                    # Fallback to any available bbox if best_idx missing
+                    bbox = next(iter(face.trajectory_bboxes.values()))
+                
+                first_frame = input_data.get("first_frame")
+                orig_h, orig_w = first_frame.shape[:2] if first_frame is not None else (380, 380)
 
                 # --- Pass 1: Cache Tensors & Fast Score (NO GRAD) ---
                 tensor_115, lm_115 = self._prepare_crop_and_landmarks(
-                    face_crop, landmarks, 1.15
+                    face_crop, landmarks, bbox, (orig_w, orig_h), 1.15
                 )
                 tensor_125, lm_125 = self._prepare_crop_and_landmarks(
-                    face_crop, landmarks, 1.25
+                    face_crop, landmarks, bbox, (orig_w, orig_h), 1.25
                 )
 
                 tensor_115 = tensor_115.to(self.device)
@@ -555,27 +561,31 @@ class SBITool(BaseForensicTool):
                     SBI_TEMPERATURE = (
                         3.0  # Desaturates extreme logits for better calibration
                     )
-                    score_115 = F_sbi.softmax(out_115 / SBI_TEMPERATURE, dim=1)[
+                    real_prob_115 = F_sbi.softmax(out_115 / SBI_TEMPERATURE, dim=1)[
                         0, 0
                     ].item()
-                    score_125 = F_sbi.softmax(out_125 / SBI_TEMPERATURE, dim=1)[
+                    real_prob_125 = F_sbi.softmax(out_125 / SBI_TEMPERATURE, dim=1)[
                         0, 0
                     ].item()
+
+                    fake_prob_115 = 1.0 - real_prob_115
+                    fake_prob_125 = 1.0 - real_prob_125
 
                 # FIX 2: Track both scales but use average for final score
-                scores_per_scale["1.15x"] = max(scores_per_scale["1.15x"], score_115)
-                scores_per_scale["1.25x"] = max(scores_per_scale["1.25x"], score_125)
+                scores_per_scale["1.15x"] = min(scores_per_scale["1.15x"], real_prob_115)
+                scores_per_scale["1.25x"] = min(scores_per_scale["1.25x"], real_prob_125)
 
                 # FIX 2: Average instead of max — prevents scale bias
-                avg_score = (score_115 + score_125) / 2.0
+                avg_real_prob = (real_prob_115 + real_prob_125) / 2.0
+                avg_fake_prob = 1.0 - avg_real_prob
 
-                if avg_score > best_score:
-                    best_score = avg_score
+                if avg_real_prob < worst_real_prob:
+                    worst_real_prob = avg_real_prob
 
                     # --- Pass 2: Conditional GradCAM ---
-                    if avg_score > SBI_FAKE_THRESHOLD:
+                    if avg_fake_prob > SBI_FAKE_THRESHOLD:
                         # Use the scale with the higher score for GradCAM
-                        if score_125 >= score_115:
+                        if fake_prob_125 >= fake_prob_115:
                             target_tensor, target_lm, target_scale = (
                                 tensor_125,
                                 lm_125,
@@ -610,58 +620,76 @@ class SBITool(BaseForensicTool):
                 # FIX M-06: Collect per-face details for transparent reporting
                 per_face_details.append(
                     {
-                        "scale_115_score": round(score_115, 4),
-                        "scale_125_score": round(score_125, 4),
-                        "avg_score": round(avg_score, 4),
+                        "scale_115_real_prob": round(real_prob_115, 4),
+                        "scale_125_real_prob": round(real_prob_125, 4),
+                        "scale_115_fake_prob": round(fake_prob_115, 4),
+                        "scale_125_fake_prob": round(fake_prob_125, 4),
+                        "avg_real_prob": round(avg_real_prob, 4),
+                        "avg_fake_prob": round(avg_fake_prob, 4),
                         "boundary_detected": boundary_detected
-                        if avg_score > SBI_FAKE_THRESHOLD
+                        if avg_fake_prob > SBI_FAKE_THRESHOLD
                         else False,
                         "boundary_region": best_boundary_region
-                        if avg_score > SBI_FAKE_THRESHOLD
+                        if avg_fake_prob > SBI_FAKE_THRESHOLD
                         else None,
                     }
                 )
 
         execution_time = time.time() - start_time
 
-        # Pass through continuous model score directly.
-        # The SBI model outputs calibrated probabilities — trust them.
-        # GradCAM boundary detection modifies CONFIDENCE, not the score.
-        final_score = best_score
+        # The SBI model detects face-swap blending. 
+        # If GradCAM verifies there is NO active blend boundary, the EfficientNet 
+        # score is a False Positive (e.g., reacting to glasses or intense studio shadows).
+        # A face-swap detector reporting a deepfake with ZERO blend boundaries is logically contradictory.
+        if (1.0 - worst_real_prob) > SBI_FAKE_THRESHOLD and not boundary_detected:
+            # Neutralize the false positive logically:
+            # Without physical boundary evidence from GradCAM, the EfficientNet fake probability is structurally unsupported.
+            # We scale down the fake probability significantly (e.g. 0.35x), meaning a 97% fake logically retreats
+            # down to ~34% fake (66% authentic) naturally without hard floors.
+            fake_prob = (1.0 - worst_real_prob) * 0.35
+            final_real_prob = 1.0 - fake_prob
+            logger.info("SBI: High fake probability but NO boundary detected. Logically dampening unsupported fake score.")
+            confidence = self._calculate_confidence(final_real_prob, boundary_detected)
+            # Slash confidence as the network contradicts its own spatial evidence
+            confidence *= 0.50
+        else:
+            final_real_prob = worst_real_prob
+            # C-06 Fix: Calibrated confidence
+            confidence = self._calculate_confidence(final_real_prob, boundary_detected)
 
-        # C-06 Fix: Calibrated confidence
-        confidence = self._calculate_confidence(final_score, boundary_detected)
-
-        # Apply compression discount if detected
+        # Apply compression discount to fake probability if compression artifacts are present.
         if compression_detected:
-            final_score *= SBI_COMPRESSION_DISCOUNT
+            final_fake_prob = (1.0 - final_real_prob) * SBI_COMPRESSION_DISCOUNT
+            final_real_prob = 1.0 - final_fake_prob
             logger.info(
                 f"SBI: Compression detected — score dampened by {SBI_COMPRESSION_DISCOUNT}x"
             )
+
+        final_fake_prob = 1.0 - final_real_prob
 
         # Evidence summary
         if boundary_detected:
             summary = (
                 f"SBI detector: localized blend boundary detected at {best_boundary_region} "
-                f"(authenticity: {1.0 - final_score:.2f}, scale: {best_scale}). "
+                f"(authenticity: {final_real_prob:.2f}, scale: {best_scale}). "
                 f"Consistent with face-swap compositing artifact."
             )
-        elif final_score > SBI_FAKE_THRESHOLD:
+        elif final_fake_prob > SBI_FAKE_THRESHOLD:
             # Model says fake but no clean boundary — lower confidence
             summary = (
-                f"SBI detector: elevated synthetic signatures (authenticity: {1.0 - final_score:.2f}), "
+                f"SBI detector: elevated synthetic signatures (authenticity: {final_real_prob:.2f}), "
                 f"but no localized boundary found. Diffuse suspicion."
             )
         else:
             summary = (
-                f"SBI detector: no blend boundary detected (authenticity: {1.0 - final_score:.2f}). "
+                f"SBI detector: no blend boundary detected (authenticity: {final_real_prob:.2f}). "
                 f"Authentic / No artifacts."
             )
 
         return ToolResult(
             tool_name=self.tool_name,
             success=True,
-            score=round(final_score, 4),
+            real_prob=round(final_real_prob, 4),
             confidence=round(confidence, 4),
             details={
                 "boundary_detected": boundary_detected,

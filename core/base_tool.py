@@ -82,7 +82,7 @@ class BaseForensicTool(ABC):
             return ToolResult(
                 tool_name=self.tool_name,
                 success=False,
-                score=score,
+                real_prob=score,
                 confidence=confidence,
                 details={"error_category": error_category},
                 error=True,
