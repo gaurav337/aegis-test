@@ -47,18 +47,42 @@ FAD_ANOMALY_BOOST = 0.15  # Modest boost when FAD detects anomaly
 
 
 class _CNNDetect(nn.Module):
+    """ResNet-50 binary classifier for CNN-generated image detection.
+    
+    IMPORTANT: Layers are exposed as direct attributes (conv1, bn1, layer1, etc.)
+    to preserve the original ResNet50 state_dict key names. Do NOT wrap in 
+    nn.Sequential — that renames keys to features.0, features.1, etc., breaking
+    checkpoint loading with strict=False (silently runs on random weights).
+    """
     def __init__(self):
         super().__init__()
         backbone = models.resnet50(weights=None)
-        # Strip the last FC layer, keep features
-        self.features = nn.Sequential(
-            *list(backbone.children())[:-1]
-        )  # -> (B, 2048, 1, 1)
+        # Copy all layers as direct attributes (preserving key names)
+        self.conv1 = backbone.conv1
+        self.bn1 = backbone.bn1
+        self.relu = backbone.relu
+        self.maxpool = backbone.maxpool
+        self.layer1 = backbone.layer1
+        self.layer2 = backbone.layer2
+        self.layer3 = backbone.layer3
+        self.layer4 = backbone.layer4
+        self.avgpool = backbone.avgpool
+        # Binary classification head (replaces original 1000-class fc)
         self.classifier = nn.Linear(2048, 1, bias=True)
 
     def forward(self, x):  # x: (B, 3, 224, 224)
-        feat = self.features(x).flatten(start_dim=1)  # (B, 2048)
-        return self.classifier(feat)  # (B, 1) logit
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
+        x = x.flatten(start_dim=1)  # (B, 2048)
+        return self.classifier(x)  # (B, 1) logit
+
 
 
 class FreqNetTool(BaseForensicTool):
@@ -120,9 +144,21 @@ class FreqNetTool(BaseForensicTool):
                     ckpt = ckpt["model"]
 
                 remapped = self._remap_cnndetect_keys(ckpt)
-                model.load_state_dict(remapped, strict=False)
-                self._weights_loaded_ok = True
-                logger.info(f"FreqNet (CNNDetect) weights loaded from {weight_path}")
+                load_result = model.load_state_dict(remapped, strict=False)
+                
+                # Verify that weights actually loaded
+                total_model_keys = len(model.state_dict())
+                missing_count = len(load_result.missing_keys) if load_result.missing_keys else 0
+                matched_count = total_model_keys - missing_count
+                
+                if matched_count < total_model_keys * 0.9:
+                    logger.error(f"FreqNet: Only {matched_count}/{total_model_keys} keys matched! Weights NOT loaded correctly.")
+                    logger.error(f"  Missing (first 5): {load_result.missing_keys[:5]}")
+                    logger.error(f"  Unexpected (first 5): {load_result.unexpected_keys[:5]}")
+                    self._weights_loaded_ok = False
+                else:
+                    self._weights_loaded_ok = True
+                    logger.info(f"FreqNet (CNNDetect) weights loaded from {weight_path} ({matched_count}/{total_model_keys} keys matched)")
             except Exception as e:
                 logger.warning(f"Failed to load CNNDetect weights: {e}")
                 self._weights_loaded_ok = False

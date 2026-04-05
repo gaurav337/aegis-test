@@ -135,13 +135,16 @@ def _safe_get_details(result: ToolResult, key: str, default=None):
     return (result.details or {}).get(key, default)
 
 
-def _extract_context(tool_results: List[ToolResult]) -> Dict[str, float]:
+def _extract_context(tool_results: List[ToolResult], flags: List[str] = None) -> Dict[str, float]:
     """FIX #68: Single-pass O(N) context extraction."""
     context = {
         "dct_peak_ratio": 0.0,
         "siglip_score": 0.5,
         "siglip_available": False,
-        "compression_detected": False,
+        "compression_detected": "COMPRESSION" in (flags or []),
+        "is_grayscale": "GRAYSCALE" in (flags or []),
+        "heavy_blur": "HEAVY_BLUR" in (flags or []),
+        "clipped_hist": "CLIPPED_BLACK" in (flags or []) or "CLIPPED_WHITE" in (flags or []),
     }
     
     for result in tool_results:
@@ -152,9 +155,8 @@ def _extract_context(tool_results: List[ToolResult]) -> Dict[str, float]:
         
         if tool_name == "run_dct":
             context["dct_peak_ratio"] = _safe_get_details(result, "peak_ratio", 0.0)
-            context["compression_detected"] = (
-                context["dct_peak_ratio"] > DCT_DOUBLE_QUANT_COMPRESSION_THRESHOLD
-            )
+            if context["dct_peak_ratio"] > DCT_DOUBLE_QUANT_COMPRESSION_THRESHOLD:
+                context["compression_detected"] = True
         elif tool_name in ["run_univfd", "run_siglip_adapter", "run_clip_adapter"]:
             context["siglip_score"] = result.fake_score
             context["siglip_available"] = True
@@ -204,7 +206,13 @@ def _route(result: ToolResult, context: Dict[str, float],
     
     # UnivFD & Xception
     if tool_name in ("run_univfd", "run_xception", "run_siglip_adapter"):
-        contribution, weight = score * base_weight, base_weight
+        weight = base_weight
+        # Geometry and Xception remain robust to color/frequency destruction
+        if tool_name == "run_xception" and (context.get("is_grayscale") or context.get("compression_detected")):
+            weight *= 1.25
+            logger.info("Evasion detected (Grayscale/Compression): upweighting XceptionNet by 1.25x")
+            
+        contribution = score * weight
         if use_confidence_weighting:
             weight *= result.confidence
             contribution = score * weight
@@ -212,13 +220,14 @@ def _route(result: ToolResult, context: Dict[str, float],
     
     # SBI
     if tool_name == "run_sbi":
-        if score < SBI_BLIND_SPOT_THRESHOLD:
-            return (0.0, 0.0, False)
         
         if score >= SBI_HIGH_CONFIDENCE_THRESHOLD:
             sbi_weight = WEIGHT_SBI
             if context.get("compression_detected", False):
                 sbi_weight *= SBI_COMPRESSION_DISCOUNT
+            if context.get("is_grayscale", False):
+                sbi_weight *= 0.1
+                logger.info("Grayscale evasion: dampening SBI weight by 10x")
             
             contribution, weight = score * sbi_weight, sbi_weight
             if use_confidence_weighting:
@@ -232,6 +241,10 @@ def _route(result: ToolResult, context: Dict[str, float],
         
         if context.get("compression_detected", False):
             sbi_weight *= SBI_COMPRESSION_DISCOUNT
+            logger.info("Compression or evasion detected: dampening SBI weight (Mid-band)")
+        if context.get("is_grayscale", False) or context.get("heavy_blur", False):
+            sbi_weight *= 0.1
+            logger.info("Grayscale evasion: dampening SBI weight by 10x (Mid-band)")
             
         contribution, weight = score * sbi_weight, sbi_weight
         if use_confidence_weighting:
@@ -241,12 +254,14 @@ def _route(result: ToolResult, context: Dict[str, float],
     
     # FreqNet
     if tool_name == "run_freqnet":
-        if score < FREQNET_BLIND_SPOT_THRESHOLD:
-            return (0.0, 0.0, False)
         
         freqnet_weight = WEIGHT_FREQNET
-        if context.get("compression_detected", False):
+        if context.get("compression_detected", False) or context.get("low_resolution", False):
             freqnet_weight *= FREQNET_COMPRESSION_DISCOUNT
+            logger.info("Compression or low resolution: dampening FreqNet")
+        if context.get("is_grayscale", False) or context.get("heavy_blur", False):
+            freqnet_weight *= 0.1
+            logger.info("Grayscale or Blur evasion: dampening FreqNet weight by 10x")
             
         contribution, weight = score * freqnet_weight, freqnet_weight
         if use_confidence_weighting:
@@ -265,6 +280,18 @@ def _route(result: ToolResult, context: Dict[str, float],
         if score < ILLUMINATION_DIFFUSE_THRESHOLD:
             return (0.0, 0.0, True)
             
+    if tool_name == "run_geometry":
+        weight = base_weight
+        if context.get("is_grayscale") or context.get("compression_detected") or context.get("heavy_blur"):
+            weight *= 1.5
+            logger.info("Evasion detected: upweighting Geometry by 1.5x")
+        
+        contribution = score * weight
+        if use_confidence_weighting:
+            weight *= result.confidence
+            contribution = score * weight
+        return (contribution, weight, False)
+
     contribution, weight = score * base_weight, base_weight
     if use_confidence_weighting:
         weight *= result.confidence
@@ -275,13 +302,14 @@ def calculate_ensemble_score(
     tool_results: List[ToolResult],
     return_metadata: bool = False,
     use_confidence_weighting: bool = False,
+    flags: List[str] = None
 ) -> Dict:
     tool_results = _deduplicate_results(tool_results)
     
     # ──────────────────────────────────────────────────────────────
     # Step 1: Extract Context (FIX #68: Single Pass O(N))
     # ──────────────────────────────────────────────────────────────
-    context = _extract_context(tool_results)
+    context = _extract_context(tool_results, flags)
     
     # ──────────────────────────────────────────────────────────────
     # Step 2: C2PA Override Check with Visual Corroboration
@@ -385,13 +413,12 @@ def calculate_ensemble_score(
         fake_score = round(max_gpu_prob, 4)
         logger.info("Suspicion Overdrive FIRED: max_gpu_prob=%.4f > threshold=%.2f. Complementary tools OR logic active.", max_gpu_prob, SUSPICION_OVERRIDE_THRESHOLD)
     else:
-        # ── PRONG 2: Borderline Consensus Detection ──
         # When ≥2 GPU specialists independently cluster near 50% (borderline zone),
         # their joint uncertainty is itself a corroborating signal of manipulation.
-        # A single tool at 49% is a coin-flip; TWO tools at ~47% is a pattern.
+        # FIX: Widen borderline to 0.40 to penalize 55% authentic signals as "uncertain-leaning-suspicious"
         borderline_gpu_probs = [
             p for p in gpu_specialist_probs 
-            if BORDERLINE_CONSENSUS_LOW <= p <= BORDERLINE_CONSENSUS_HIGH
+            if min(0.40, BORDERLINE_CONSENSUS_LOW) <= p <= BORDERLINE_CONSENSUS_HIGH
         ]
         
         consensus_anchor = 0.0
@@ -425,12 +452,14 @@ def calculate_ensemble_score(
         # Apply GPU degradation boost (pushes fake_score UP when coverage is thin)
         degraded_score = candidate_score * gpu_degradation_boost
         
-        # CRITICAL FIX: Never let degradation boost push a fundamentally "REAL" score (< 0.50) into the "FAKE" zone (>= 0.50).
-        # We only manufacture FAKE verdicts if the base signal was already suspicious.
-        if candidate_score < 0.50 and degraded_score >= 0.50:
+        # CRITICAL FIX: Allow degradation boost to push borderline scores (>0.40) into FAKE zone!
+        # Treat abstentions as uncertainty, not neutrality. Only cap if the base score is confidently REAL (<0.40).
+        if candidate_score < 0.40 and degraded_score >= 0.50:
             candidate_score = 0.4999
-            logger.info("Degradation boost capped at 0.4999 (was going to push REAL score to %.4f)", degraded_score)
+            logger.info("Degradation boost capped at 0.4999 (was going to push confident REAL score to %.4f)", degraded_score)
         else:
+            if candidate_score >= 0.40 and degraded_score >= 0.50:
+                logger.info("Degradation boost pushed borderline score (%.4f) to FAKE (%.4f)", candidate_score, degraded_score)
             candidate_score = min(1.0, degraded_score)
         
         fake_score = round(max(0.0, min(1.0, candidate_score)), 4)
@@ -508,7 +537,8 @@ class EnsembleAggregator:
         self.tool_results[result.tool_name] = result
         
     def get_final_score(self) -> float:
-        res = calculate_ensemble_score(list(self.tool_results.values()))
+        flags = getattr(self, "flags", [])
+        res = calculate_ensemble_score(list(self.tool_results.values()), flags=flags)
         return float(res.get("ensemble_score", 0.0))
         
     def get_verdict(self) -> str:

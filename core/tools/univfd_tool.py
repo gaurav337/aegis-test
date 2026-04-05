@@ -274,24 +274,21 @@ class UnivFDTool(BaseForensicTool):
                     pil_crops.append(face_crop)
                 has_faces = True
 
-        # FIX 2: Full image fallback ONLY when zero faces detected
-        if not has_faces:
-            if first_frame is not None:
-                # FIX 1: NO manual resize — let CLIP processor handle it
-                raw_img = Image.fromarray(first_frame).convert("RGB")
+        # Evaluate BOTH face crops and the full scene!
+        # Generative AI artifacts are often most obvious in the global context
+        # (e.g., overlapping bodies, weird backgrounds), which face crops entirely miss.
+        if first_frame is not None:
+            # NO manual resize — let CLIP processor handle it
+            raw_img = Image.fromarray(first_frame).convert("RGB")
+            pil_crops.append(raw_img)
+        elif media_path:
+            try:
+                raw_img = Image.open(media_path).convert("RGB")
                 pil_crops.append(raw_img)
-                logger.info("UnivFD: No faces found, using full frame as fallback.")
-            elif media_path:
-                try:
-                    raw_img = Image.open(media_path).convert("RGB")
-                    pil_crops.append(raw_img)
-                    logger.info(
-                        "UnivFD: No faces found, using full raw image as fallback."
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"UnivFD: Failed to load raw image from {media_path}: {e}"
-                    )
+            except Exception as e:
+                logger.warning(
+                    f"UnivFD: Failed to load raw image from {media_path}: {e}"
+                )
 
         if not pil_crops:
             return ToolResult(
@@ -380,7 +377,7 @@ class UnivFDTool(BaseForensicTool):
                 "is_phone_origin": is_phone,
                 "effective_threshold": effective_threshold,
                 "num_crops_analyzed": len(pil_crops),
-                "face_only_analysis": has_faces,
+                "face_only_analysis": False,
                 "siglip_score": worst_face_score,  # Backward compatibility
                 "execution_time": execution_time,
             },

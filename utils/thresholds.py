@@ -10,10 +10,16 @@ All tools import from this file. No hardcoded values elsewhere.
 # HARDWARE & VRAM THRESHOLDS
 # =============================================================================
 
-VRAM_MIN_FOR_GPU = 3.5  # Minimum VRAM (GB) to use GPU
-VRAM_RECOMMENDED = 6.0  # Recommended VRAM for comfortable inference
-VRAM_MODEL_LOAD_THRESHOLD = 3.5  # Threshold for model loading decision
-VRAM_RESERVED_BUFFER_GB = 1.0  # Reserved VRAM buffer for safety
+VRAM_MIN_FOR_GPU = (
+    2.0  # Minimum VRAM (GB) to use GPU (lowered for 4GB GPUs like RTX 3050)
+)
+VRAM_RECOMMENDED = 4.0  # Recommended VRAM for comfortable inference
+VRAM_MODEL_LOAD_THRESHOLD = (
+    2.0  # Threshold for model loading decision (lowered for 4GB GPUs)
+)
+VRAM_RESERVED_BUFFER_GB = (
+    0.5  # Reserved VRAM buffer for safety (reduced for smaller GPUs)
+)
 
 GPU_DECODE_BATCH_SIZE = 8  # Batch size for GPU video decoding
 CPU_DECODE_BATCH_SIZE = 32  # Batch size for CPU video decoding

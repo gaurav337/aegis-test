@@ -212,7 +212,56 @@ class PreprocessResult:
     max_face_area_ratio: float = 0.0
     frames_with_faces_pct: float = 0.0
     heuristic_flags: List[str] = field(default_factory=list)
+    heuristic_flags: List[str] = field(default_factory=list)
     insufficient_temporal_data: bool = False
+    
+    def _detect_evasion(self, image: np.ndarray, path: Path) -> List[str]:
+        """Detect evasion attempts via post-processing anomalies."""
+        flags = []
+        if image is None or image.size == 0:
+            return flags
+            
+        h, w = image.shape[:2]
+        total_pixels = h * w
+        if total_pixels == 0:
+            return flags
+            
+        # 1. Grayscale / Desaturation (Evasion via removing color artifacts)
+        if image.ndim == 3 and image.shape[2] == 3:
+            hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+            mean_saturation = np.mean(hsv[:, :, 1])
+            if mean_saturation < 40.0:
+                flags.append("GRAYSCALE")
+                
+        # 2. Histogram Clipping (Over/Under Exposure Masking)
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+        if float(hist[0][0]) > (total_pixels * 0.15):
+            flags.append("CLIPPED_BLACK")
+        if float(hist[255][0]) > (total_pixels * 0.15):
+            flags.append("CLIPPED_WHITE")
+            
+        # 3. Compression (Bytes per pixel heuristic)
+        try:
+            if path and Path(path).exists() and Path(path).is_file():
+                file_size = Path(path).stat().st_size
+                bpp = file_size / total_pixels
+                if bpp < 0.08:
+                    flags.append("COMPRESSION")
+        except Exception:
+            pass
+            
+        # 4. Blur Uniformity (Smoothing Masking)
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        if laplacian.var() < 10.0:
+            flags.append("HEAVY_BLUR")
+            
+        # 5. Low Resolution
+        if total_pixels < 200_000:
+            flags.append("LOW_RES")
+            
+        return flags
+    
     
 class Preprocessor:
     """MediaPipe-based robust face landmark extraction and patching class."""
@@ -458,9 +507,15 @@ class Preprocessor:
                 
                 # --- PHASE 2: EXTRACT CROPS PER-TRACK & HEURISTICS ---
                 # Use eagerly-cached first_frame to avoid DiskBackedFrameList lazy-load race
-                gray_first = cv2.cvtColor(result.first_frame, cv2.COLOR_RGB2GRAY)
-                if gray_first.mean() < 50.0:
-                    result.heuristic_flags.append("LOW_LIGHT")
+                # FIX: Comprehensive evasion scan
+                if result.first_frame is not None:
+                    evasion_flags = result._detect_evasion(result.first_frame, path)
+                    result.heuristic_flags.extend(evasion_flags)
+                    
+                    gray_first = cv2.cvtColor(result.first_frame, cv2.COLOR_RGB2GRAY)
+                    if gray_first.mean() < 50.0:
+                        if "LOW_LIGHT" not in result.heuristic_flags:
+                            result.heuristic_flags.append("LOW_LIGHT")
                 
                 for trk_id, track_obj in established_tracks.items():
                     # FIX 4: Much more permissive — only discard tracks with < 3–5 detections
@@ -605,6 +660,10 @@ class Preprocessor:
                 image = load_image(path)
                 result.frames_30fps = [image]
                 result.first_frame = image
+                
+                # FIX: Comprehensive evasion scan
+                evasion_flags = result._detect_evasion(image, path)
+                result.heuristic_flags.extend(evasion_flags)
                 
                 final_landmarks_list = self._get_landmarks(image)
                 if final_landmarks_list is None:

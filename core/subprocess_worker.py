@@ -2,9 +2,19 @@ import sys
 import pickle
 import traceback
 import os
+import logging
 
 # Add project root to sys path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+
+# Propagate AEGIS_MODEL_DIR if not set — always resolve to project root
+if 'AEGIS_MODEL_DIR' not in os.environ:
+    os.environ['AEGIS_MODEL_DIR'] = os.path.join(project_root, 'models')
+
+# Route subprocess logs to stderr so parent process captures them
+logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)s | [WORKER] %(message)s')
 
 from core.tools.registry import _TOOL_MANIFEST
 

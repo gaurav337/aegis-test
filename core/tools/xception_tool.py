@@ -229,7 +229,7 @@ class XceptionTool(BaseForensicTool):
         return float(np.mean(scores_arr)), float(np.std(scores_arr))
 
     def _apply_consistency_dampening(
-        self, mean_score: float, std_score: float
+        self, mean_score: float, std_score: float, is_grayscale: bool = False
     ) -> Tuple[float, str]:
         """Apply patch-consistency dampening to reduce ISP false positives.
 
@@ -239,6 +239,12 @@ class XceptionTool(BaseForensicTool):
         if mean_score < PATCH_ACTIVATION_SCORE:
             # Score too low to warrant consistency check
             return mean_score, "Score below activation threshold"
+
+        # FIX: Grayscale evasion (destroying variance) should NOT trigger the safety dampening
+        if is_grayscale:
+            if std_score < PATCH_STD_THRESHOLD:
+                return mean_score, f"Patch std={std_score:.4f} < {PATCH_STD_THRESHOLD}: Dampening blocked due to GRAYSCALE evasion"
+            return mean_score, f"Patch std={std_score:.3f} >= {PATCH_STD_THRESHOLD}: localized artifacts detected in grayscale"
 
         if std_score >= PATCH_STD_THRESHOLD:
             # High variance → localized artifacts → likely real deepfake
@@ -276,6 +282,8 @@ class XceptionTool(BaseForensicTool):
         tracked_faces = input_data.get("tracked_faces", [])
         media_path = input_data.get("media_path", None)
         first_frame = input_data.get("first_frame", None)
+        heuristic_flags = input_data.get("heuristic_flags", [])
+        is_grayscale = "GRAYSCALE" in heuristic_flags
 
         # Build list of numpy crops (RGB, uint8) to analyze
         np_crops = []
@@ -372,7 +380,7 @@ class XceptionTool(BaseForensicTool):
 
                 # Apply consistency dampening
                 adjusted_score, consistency_note = self._apply_consistency_dampening(
-                    base_score_to_dampen, patch_std
+                    base_score_to_dampen, patch_std, is_grayscale
                 )
 
                 final_score = adjusted_score

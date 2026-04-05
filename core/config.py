@@ -51,7 +51,7 @@ class AgentConfig:
     # === OPENROUTER SPECIFIC ===
     use_openrouter: bool = False  # Runtime flag set by API endpoint
     openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
+    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-nano-30b-a3b:free")
 
     
     # === GENERATION SETTINGS ===

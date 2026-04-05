@@ -80,20 +80,22 @@ class ForensicAgent:
             logger.error(f"Error executing {tool_name}: {e}\n{traceback.format_exc()}")
             return self._make_error_result(tool_name, str(e), start_time)
 
-    def analyze(self, preprocess_result: Any, media_path: str = None) -> Generator[AgentEvent, Any, dict]:
+    def analyze(self, preprocess_result: Any, media_path: str = None, generate_explanation: bool = True) -> Generator[AgentEvent, Any, dict]:
         """
         Main analysis loop — orchestrates CPU → GPU Gate → GPU Phase → Ensemble → LLM.
         """
         self.ensemble = EnsembleAggregator()
+        flags = getattr(preprocess_result, "heuristic_flags", [])
+        
         input_data = {
             "media_path": media_path,
             "tracked_faces": preprocess_result.tracked_faces,
             "frames_30fps": preprocess_result.frames_30fps,
             "first_frame": getattr(preprocess_result, "first_frame", None),
             "original_media_type": getattr(preprocess_result, "original_media_type", "image"),
+            "heuristic_flags": flags,
         }
-        
-        flags = getattr(preprocess_result, "heuristic_flags", [])
+        self.ensemble.flags = flags
         
         # Determine Face Gate
         face_detected = getattr(preprocess_result, "has_face", False)
@@ -235,33 +237,20 @@ class ForensicAgent:
                 
             for tool_name in gpu_sequence:
                 yield AgentEvent("TOOL_STARTED", tool_name)
-                
-                # Manual sequential execution to emulate run_with_vram_cleanup
                 start_time = time.time()
                 try:
                     tool = self.registry.get_tool(tool_name)
-                    
-                    req_vram = GPU_VRAM_REQUIREMENTS.get(tool_name, 0.6)
-                    
-                    def make_loader(t): 
-                        return lambda: t
-                    def make_inference(data):
-                        return lambda t: t.execute(data)
-                        
+                    if tool is None:
+                        raise RuntimeError(f"Tool {tool_name} not found in registry")
+
+                    # SubprocessToolProxy manages its own subprocess + VRAM internally.
+                    # Do NOT wrap in run_with_vram_cleanup — that treats the proxy as an
+                    # nn.Module and causes the 0MB CUDA log + VRAMLifecycleManager lock contention.
                     with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            run_with_vram_cleanup, 
-                            make_loader(tool), 
-                            make_inference(input_data), 
-                            model_name=tool_name, 
-                            required_vram_gb=req_vram
-                        )
-                        result = future.result(timeout=60)
-                    self.ensemble.add_result(result)
+                        future = executor.submit(tool.execute, input_data)
+                        result = future.result(timeout=90)  # 90s: model load + inference
                     
-                    if hasattr(torch.cuda, "empty_cache"):
-                        torch.cuda.empty_cache()
-                        
+                    self.ensemble.add_result(result)
                     yield AgentEvent("tool_complete", tool_name, data={
                         "success": result.success,
                         "score": result.fake_score,
@@ -270,17 +259,12 @@ class ForensicAgent:
                         "error_msg": result.error_msg,
                     })
                 except FuturesTimeoutError:
-                    logger.error(f"Timeout executing {tool_name} after 60s")
-                    self.ensemble.add_result(self._make_error_result(tool_name, "Timeout after 60s", start_time))
-                    if hasattr(torch.cuda, "empty_cache"):
-                        torch.cuda.empty_cache()
-                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "score": 0.5, "confidence": 0.0, "evidence_summary": "Tool timed out.", "error_msg": "Timeout after 60s"})
+                    logger.error(f"Timeout executing {tool_name} after 90s")
+                    self.ensemble.add_result(self._make_error_result(tool_name, "Timeout after 90s", start_time))
+                    yield AgentEvent("tool_complete", tool_name, data={"success": False, "score": 0.5, "confidence": 0.0, "evidence_summary": "Tool timed out.", "error_msg": "Timeout after 90s"})
                 except Exception as e:
-                    logger.error(f"VRAM/Inference Error executing {tool_name}: {e}\n{traceback.format_exc()}")
-                    # Fallback counts as ABSTAIN/ERROR
+                    logger.error(f"Error executing {tool_name}: {e}\n{traceback.format_exc()}")
                     self.ensemble.add_result(self._make_error_result(tool_name, str(e), start_time))
-                    if hasattr(torch.cuda, "empty_cache"):
-                        torch.cuda.empty_cache()
                     yield AgentEvent("tool_complete", tool_name, data={"success": False, "score": 0.5, "confidence": 0.0, "evidence_summary": "Tool failed.", "error_msg": str(e)})
 
         # Check DEGRADED status if >50% of mapped tools errored out
@@ -295,12 +279,17 @@ class ForensicAgent:
         verdict_str = self.ensemble.get_verdict()
         
         yield AgentEvent("llm_start")
-        explanation = yield from generate_verdict(
-            ensemble_score=final_score,
-            tool_results=self.ensemble.tool_results,
-            verdict=verdict_str,
-        )
         
+        if generate_explanation:
+            explanation = yield from generate_verdict(
+                ensemble_score=final_score,
+                tool_results=self.ensemble.tool_results,
+                verdict=verdict_str,
+                config=self.config
+            )
+        else:
+            explanation = "[Explanation skipped during batch evaluation]"
+            
         yield AgentEvent("verdict", data={
             "verdict": verdict_str,
             "score": final_score,

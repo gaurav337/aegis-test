@@ -1,0 +1,2 @@
+Total Processed,True Positives (TP),True Negatives (TN),False Positives (FP),False Negatives (FN),Accuracy,Precision,Recall,F1 Score,ROC AUC
+100,24,20,30,26,0.44,0.4444444444444444,0.48,0.46153846153846156,0.47659999999999997

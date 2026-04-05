@@ -58,13 +58,27 @@ class SubprocessToolProxy(BaseForensicTool):
         
         try:
             with open(in_path, 'wb') as f:
-                # We expect input_data dictionary or similar to be completely picklable
-                pickle.dump(input_data, f)
+                # GPU tools only need face crops, first_frame, media_path, and context.
+                # Strip frames_30fps — it can be hundreds of full-resolution video frames
+                # (potentially 100MB+), causing massive pickle files that time out.
+                slim_input = {k: v for k, v in input_data.items() if k != 'frames_30fps'}
+                pickle.dump(slim_input, f)
+            
+            # Build env: inherit current environment + ensure AEGIS_MODEL_DIR is always set
+            env = os.environ.copy()
+            if 'AEGIS_MODEL_DIR' not in env:
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+                env['AEGIS_MODEL_DIR'] = os.path.join(project_root, 'models')
                 
             cmd = [self.python_exec, self.worker_script, self.tool_name, in_path]
             
-            # Note: We capture stderr for debugging since stdout writes might be polluted by libs
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            # Capture stderr for debugging; subprocess logs are routed there
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+            
+            # Always forward subprocess stderr to our logger so model loading is visible
+            if result.stderr:
+                for line in result.stderr.strip().splitlines():
+                    logger.info(f"[{self.tool_name} worker] {line}")
             
             if result.returncode != 0:
                 logger.error(f"{self.tool_name} subprocess worker failed. Stderr:\n{result.stderr}\nStdout:\n{result.stdout}")
